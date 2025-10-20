@@ -111,24 +111,18 @@ const formatFullDate = (dateString: string): string => {
   }
 };
 
-// Helper function to get avatar URL
 const getAvatarUrl = (avatarUrl?: string) => {
   if (!avatarUrl) return '';
 
+  // If it's already a Cloudinary URL or external URL, return as is
   if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
     return avatarUrl;
   }
 
-  if (avatarUrl.startsWith('/uploads/') || avatarUrl.startsWith('/api/uploads/')) {
-    return `http://localhost:5000${avatarUrl}`;
-  }
-
-  console.log('getAvatarUrl: Processing filename:', avatarUrl);
-  const fullUrl = `http://localhost:5000/api/uploads/avatars/${avatarUrl}`;
-  console.log('getAvatarUrl: Generated URL:', fullUrl);
-  return fullUrl;
+  // If it's an old local path, construct Cloudinary URL or return empty
+  console.warn('Found local avatar path, should be migrated to Cloudinary:', avatarUrl);
+  return '';
 };
-
 interface Trade {
   trade_id: string;
   item_offered: string;
@@ -2180,7 +2174,7 @@ export function TradingHub() {
                       <div className="flex items-center gap-3">
                         <Avatar className="w-10 h-10">
                           <AvatarImage
-                            src={getAvatarUrl('')}
+                            src={getAvatarUrl()}
                             className="object-cover"
                             onError={(e) => {
                               const target = e.target as HTMLImageElement;

@@ -51,7 +51,8 @@ export const tradeController = {
               username: trade.user_id.username,
               roblox_username: trade.user_id.roblox_username,
               credibility_score: trade.user_id.credibility_score,
-              vouch_count: trade.user_id.vouch_count
+              vouch_count: trade.user_id.vouch_count,
+              avatar_url: trade.user_id.avatar_url
             },
             images: trade.images || [],
             comment_count: commentCount,
@@ -134,7 +135,7 @@ export const tradeController = {
       console.log('Trade created successfully:', savedTrade._id);
 
       // Populate user data for the response
-      await savedTrade.populate('user_id', 'username roblox_username credibility_score vouch_count');
+      await savedTrade.populate('user_id', 'username roblox_username credibility_score vouch_count avatar_url');
 
       // Get initial vote/comment counts (should be 0 for new trade)
       const [commentCount, upvotes, downvotes, vouchCount] = await Promise.all([
@@ -161,7 +162,8 @@ export const tradeController = {
             username: savedTrade.user_id.username,
             roblox_username: savedTrade.user_id.roblox_username,
             credibility_score: savedTrade.user_id.credibility_score,
-            vouch_count: savedTrade.user_id.vouch_count
+            vouch_count: savedTrade.user_id.vouch_count,
+            avatar_url: trade.user_id.avatar_url
           },
           images: savedTrade.images || [],
           comment_count: commentCount,
@@ -229,7 +231,8 @@ export const tradeController = {
           username: trade.user_id.username,
           roblox_username: trade.user_id.roblox_username,
           credibility_score: trade.user_id.credibility_score,
-          vouch_count: trade.user_id.vouch_count
+          vouch_count: trade.user_id.vouch_count,
+          avatar_url: trade.user_id.avatar_url
         },
         images: trade.images || [],
         comment_count: commentCount,
@@ -302,7 +305,8 @@ export const tradeController = {
             username: trade.user_id.username,
             roblox_username: trade.user_id.roblox_username,
             credibility_score: trade.user_id.credibility_score,
-            vouch_count: trade.user_id.vouch_count
+            vouch_count: trade.user_id.vouch_count,
+            avatar_url: trade.user_id.avatar_url
           },
           images: trade.images || [],
           comment_count: commentCount,
@@ -382,7 +386,7 @@ export const tradeController = {
 
       const [comments, total] = await Promise.all([
         TradeComment.find({ trade_id: tradeId })
-          .populate('user_id', 'username roblox_username credibility_score')
+          .populate('user_id', 'username roblox_username credibility_score avatar_url')
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limit),
@@ -398,7 +402,8 @@ export const tradeController = {
             _id: comment.user_id._id,
             username: comment.user_id.username,
             roblox_username: comment.user_id.roblox_username,
-            credibility_score: comment.user_id.credibility_score
+            credibility_score: comment.user_id.credibility_score,
+            avatar_url: trade.user_id.avatar_url
           }
         })),
         pagination: {
@@ -443,7 +448,7 @@ export const tradeController = {
       });
 
       const savedComment = await newComment.save();
-      await savedComment.populate('user_id', 'username roblox_username credibility_score');
+      await savedComment.populate('user_id', 'username roblox_username credibility_score avatar_url');
 
       // Create notification for trade owner (if not commenting on own trade)
       if (!trade.user_id.equals(userId)) {
@@ -473,7 +478,8 @@ export const tradeController = {
             _id: savedComment.user_id._id,
             username: savedComment.user_id.username,
             roblox_username: savedComment.user_id.roblox_username,
-            credibility_score: savedComment.user_id.credibility_score
+            credibility_score: savedComment.user_id.credibility_score,
+            avatar_url: trade.user_id.avatar_url
           }
         }
       });

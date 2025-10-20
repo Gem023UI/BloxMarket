@@ -13,6 +13,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import mongoose from 'mongoose';
+// import cloudinary from './config/cloudinary.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -143,11 +144,14 @@ if (!fs.existsSync(documentsDir)) {
 
 // MongoDB connection
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/bloxmarket';
+import cloudinary from './config/cloudinary.js';
 
 async function connectToDatabase() {
   try {
     await mongoose.connect(MONGODB_URI);
     console.log('✅ MongoDB connected successfully');
+    console.log('✅ Cloudinary configured successfully');
+    console.log(`☁️  Cloud Name: ${process.env.CLOUDINARY_CLOUD_NAME || 'Not set'}`);
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error.message);
     process.exit(1);
@@ -156,6 +160,7 @@ async function connectToDatabase() {
 
 // Connect to database
 connectToDatabase();
+
 
 // Remove this custom CORS middleware as we're using the cors package above
 

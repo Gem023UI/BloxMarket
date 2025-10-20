@@ -5,6 +5,7 @@ import { Wishlist } from '../models/Wishlist.js';
 import mongoose from 'mongoose';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
+import { uploadToCloudinary, deleteFromCloudinary } from '../utils/cloudinaryUpload.js';
 
 export const userController = {
   // Get current user profile
@@ -208,23 +209,30 @@ export const userController = {
 
       const user = await User.findById(userId);
       if (!user) {
-        // Clean up uploaded file if user not found
-        if (fs.existsSync(req.file.path)) {
-          fs.unlinkSync(req.file.path);
-        }
         return res.status(404).json({ error: 'User not found' });
       }
 
-      // Delete old avatar if exists
+      // Delete old avatar from Cloudinary if exists
       if (user.avatar_url) {
-        const oldAvatarPath = user.avatar_url.replace('/api/uploads/avatars/', './uploads/avatars/');
-        if (fs.existsSync(oldAvatarPath)) {
-          fs.unlinkSync(oldAvatarPath);
+        try {
+          // Extract public_id from Cloudinary URL
+          const urlParts = user.avatar_url.split('/');
+          const publicIdWithExtension = urlParts[urlParts.length - 1];
+          const publicId = publicIdWithExtension.split('.')[0];
+          const fullPublicId = `bloxmarket/avatars/${publicId}`;
+          
+          await deleteFromCloudinary(fullPublicId);
+        } catch (deleteError) {
+          console.error('Error deleting old avatar:', deleteError);
+          // Continue with upload even if delete fails
         }
       }
 
-      // Update user with new avatar URL
-      user.avatar_url = `/api/uploads/avatars/${req.file.filename}`;
+      // Upload new avatar to Cloudinary
+      const uploadResult = await uploadToCloudinary(req.file, 'avatars');
+
+      // Update user with Cloudinary URL
+      user.avatar_url = uploadResult.secure_url;
       await user.save();
 
       res.json({

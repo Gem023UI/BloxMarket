@@ -712,6 +712,7 @@ export const eventController = {
         content: comment.content,
         created_at: comment.created_at,
         username: comment.user_id.username,
+        avatar_url: user.avatar_url,
         credibility_score: comment.user_id.credibility_score
       }));
 
@@ -786,6 +787,7 @@ export const eventController = {
         content: comment.content,
         created_at: comment.created_at,
         username: comment.user_id.username,
+        avatar_url: user.avatar_url,
         credibility_score: comment.user_id.credibility_score
       };
 

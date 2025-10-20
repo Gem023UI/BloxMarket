@@ -85,7 +85,7 @@ class WishlistController {
 
       // Get wishlists with user data
       const wishlists = await Wishlist.find(query)
-        .populate('user_id', 'username credibility_score')
+        .populate('user_id', 'username credibility_score avatar_url')
         .sort(sortObject)
         .skip(skip)
         .limit(parseInt(limit))
@@ -176,7 +176,7 @@ class WishlistController {
       }
 
       const wishlist = await Wishlist.findById(wishlistId)
-        .populate('user_id', 'username credibility_score roblox_username')
+        .populate('user_id', 'username credibility_score roblox_username avatar_url')
         .lean();
 
       if (!wishlist) {
@@ -341,7 +341,7 @@ class WishlistController {
 
       // Populate user data
       const populatedWishlist = await Wishlist.findById(wishlist._id)
-        .populate('user_id', 'username credibility_score')
+        .populate('user_id', 'username credibility_score avatar_url')
         .lean();
 
       console.log('Wishlist populated successfully');
@@ -500,7 +500,7 @@ class WishlistController {
 
       // Populate user data
       const populatedWishlist = await Wishlist.findById(wishlist._id)
-        .populate('user_id', 'username credibility_score')
+        .populate('user_id', 'username credibility_score avatar_url')
         .lean();
 
       // Get comment count
@@ -668,7 +668,7 @@ class WishlistController {
 
       // Get comments
       const comments = await WishlistComment.find({ wishlist_id: wishlistId })
-        .populate('user_id', 'username credibility_score')
+        .populate('user_id', 'username credibility_score avatar_url')
         .sort({ created_at: -1 })
         .lean();
 
@@ -773,7 +773,7 @@ class WishlistController {
 
       // Populate user data
       const populatedComment = await WishlistComment.findById(comment._id)
-        .populate('user_id', 'username credibility_score')
+        .populate('user_id', 'username credibility_score avatar_url')
         .lean();
 
       res.status(201).json({
@@ -818,7 +818,7 @@ class WishlistController {
 
       // Get user's wishlists
       const wishlists = await Wishlist.find({ user_id: userId })
-        .populate('user_id', 'username credibility_score')
+        .populate('user_id', 'username credibility_score avatar_url')
         .sort({ created_at: -1 })
         .skip(skip)
         .limit(parseInt(limit))

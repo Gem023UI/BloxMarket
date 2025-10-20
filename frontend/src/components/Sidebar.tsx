@@ -95,15 +95,15 @@ export function Sidebar() {
   const getAvatarUrl = (avatarUrl?: string) => {
     if (!avatarUrl) return '';
 
+    // If it's already a Cloudinary URL or external URL, return as is
     if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
       return avatarUrl;
     }
 
-    if (avatarUrl.startsWith('/uploads/') || avatarUrl.startsWith('/api/uploads/')) {
-      return `http://localhost:5000${avatarUrl}`;
-    }
-
-    return `http://localhost:5000/uploads/avatars/${avatarUrl}`;
+    // If it's an old local path, construct Cloudinary URL or return empty
+    // You might want to handle migration of old avatars here
+    console.warn('Found local avatar path, should be migrated to Cloudinary:', avatarUrl);
+    return '';
   };
 
   // Debug logging to help identify issues

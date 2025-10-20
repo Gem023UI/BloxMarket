@@ -1,6 +1,9 @@
-const API_BASE_URL = 'http://localhost:5000/api';
 import { shouldThrottle } from '../lib/throttle';
 import { handleRateLimit, isRateLimited } from '../lib/rateLimitHandler';
+
+const API_URL = import.meta.env.VITE_BACKEND_URL | import.meta.env.VITE_API_URL;
+
+const API_BASE_URL = `${API_URL}`;
 
 class ApiService {
   private token: string | null;
@@ -320,9 +323,7 @@ class ApiService {
   }
 
   async updateTrade(
-    tradeId: string,
-    tradeData: { itemOffered: string; itemRequested?: string; description?: string }
-  ) {
+tradeId: string, tradeData: { itemOffered: string; itemRequested?: string; description?: string; }, editUploadSelectedImages: File[]  ) {
     // Send JSON; backend updateTrade expects camelCase fields
     return this.request(`/trades/${tradeId}`, {
       method: 'PATCH',

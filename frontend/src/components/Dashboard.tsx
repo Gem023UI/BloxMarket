@@ -157,18 +157,15 @@ interface ImageViewerProps {
 const getAvatarUrl = (avatarUrl?: string) => {
   if (!avatarUrl) return '';
 
+  // If it's already a Cloudinary URL or external URL, return as is
   if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
     return avatarUrl;
   }
 
-  if (avatarUrl.startsWith('/uploads/') || avatarUrl.startsWith('/api/uploads/')) {
-    return `http://localhost:5000${avatarUrl}`;
-  }
-
-  console.log('getAvatarUrl: Processing filename:', avatarUrl);
-  const fullUrl = `http://localhost:5000/api/uploads/avatars/${avatarUrl}`;
-  console.log('getAvatarUrl: Generated URL:', fullUrl);
-  return fullUrl;
+  // If it's an old local path, construct Cloudinary URL or return empty
+  // You might want to handle migration of old avatars here
+  console.warn('Found local avatar path, should be migrated to Cloudinary:', avatarUrl);
+  return '';
 };
 
 // ImageViewer Component
@@ -977,7 +974,7 @@ function PostModal({ post, isOpen, onClose, onUserClick, onReportClick }: PostMo
                     <div key={comment.comment_id || comment.id} className="flex gap-5">
                       <Avatar className="w-12 h-12">
                         <AvatarImage
-                          src={getAvatarUrl(comment.user?.avatar_url)}
+                          src={getAvatarUrl(post.user.avatar_url)}
                           className="object-cover"
                           onError={(e) => {
                             const target = e.target as HTMLImageElement;
@@ -1035,7 +1032,7 @@ function PostModal({ post, isOpen, onClose, onUserClick, onReportClick }: PostMo
               <div className="flex gap-5">
                 <Avatar className="w-12 h-12">
                   <AvatarImage
-                    src={getAvatarUrl(user?.avatar_url as string)}
+                    src={getAvatarUrl(post.user.avatar_url)}
                     className="object-cover"
                     onError={(e) => {
                       const target = e.target as HTMLImageElement;
