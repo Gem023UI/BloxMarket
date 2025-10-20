@@ -33,7 +33,7 @@ import uploadsRoutes from './routes/uploads.js';
 import verificationRoutes from './routes/verification.js';
 import reportRoutes from './routes/reports.js';
 import userDatatableRoutes from './routes/datatables/userDatatableRoutes.js';
-import eventsDatatableRoutes from './routes/datatables/eventsDatatableRoutes.js';
+import eventsDatatableRoutes from './routes/datatables/eventsDataTableRoutes.js';
 import forumDatatableRoutes from './routes/datatables/forumDatatableRoutes.js';
 import tradingPostDatatableRoutes from './routes/datatables/tradingPostDatatableRoutes.js';
 
