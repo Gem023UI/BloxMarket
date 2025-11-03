@@ -2,7 +2,7 @@ import * as React from "react";
 import type { ReactNode } from "react";
 import { Input } from "./input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
-import { Card, CardContent, CardHeader } from "./card";
+import { Card, CardHeader, CardContent } from "./card";
 import { Loader2, Search, AlertCircle } from "lucide-react";
 
 // Universal Page Layout Component
@@ -42,7 +42,6 @@ interface PageLayoutProps {
   };
 
   // Layout props
-  maxWidth?: string;
   gridCols?: {
     default: number;
     md?: number;
@@ -70,17 +69,10 @@ export function PageLayout({
   error,
   children,
   emptyState,
-  maxWidth = "max-w-6xl",
   gridCols = { default: 1, lg: 2, xl: 3 }
 }: PageLayoutProps) {
-  const gridClasses = `grid grid-cols-${gridCols.default} ${
-    gridCols.md ? `md:grid-cols-${gridCols.md}` : ''
-  } ${gridCols.lg ? `lg:grid-cols-${gridCols.lg}` : ''} ${
-    gridCols.xl ? `xl:grid-cols-${gridCols.xl}` : ''
-  } gap-6`;
-
   return (
-    <div className="flex-1 overflow-hidden">
+    <div className="flex flex-col h-screen">
       {/* Header */}
       <div className="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-6">
         <div className="flex items-center justify-between">
@@ -89,7 +81,7 @@ export function PageLayout({
               {icon}
               {title}
             </h1>
-            <p className="text-muted-foreground">{description}</p>
+            <p className="text-muted-foreground text-sm">{description}</p>
           </div>
           {headerActions && (
             <div className="flex items-center gap-3">
@@ -100,15 +92,15 @@ export function PageLayout({
       </div>
 
       {/* Filters */}
-      <div className="border-b border-border p-4 bg-muted/30">
-        <div className="flex items-center gap-4">
+      <div className="border-b border-border p-6 bg-muted/30">
+        <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 flex-1">
             <Search className="w-4 h-4 text-muted-foreground" />
             <Input
               placeholder={searchPlaceholder}
               value={searchValue}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => onSearchChange(e.target.value)}
-              className="max-w-sm"
+              className="max-w-xs"
             />
           </div>
 
@@ -145,7 +137,7 @@ export function PageLayout({
       </div>
 
       {/* Stats Bar */}
-      <div className="bg-background p-4 border-b border-border">
+      <div className="bg-muted/30 border-b border-border p-4">
         <div className="flex items-center justify-center gap-8 text-sm">
           {stats.map((stat, index) => (
             <div key={index} className="flex items-center gap-2">
@@ -155,7 +147,7 @@ export function PageLayout({
           ))}
           {loading && (
             <div className="flex items-center gap-2">
-              <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+              <Loader2 className="w-4 h-4 animate-spin" />
               <span>Loading...</span>
             </div>
           )}
@@ -164,26 +156,30 @@ export function PageLayout({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        <div className={`${maxWidth} mx-auto p-6`}>
+        <div className={`max-w-7xl mx-auto p-6`}>
           {loading && (
             <div className="flex items-center justify-center py-12">
-              <Loader2 className="w-8 h-8 animate-spin" />
-              <span className="ml-2">Loading...</span>
+              <Loader2 className="w-8 h-8 animate-spin mr-2" />
+              <span>Loading...</span>
             </div>
           )}
 
           {error && !loading && (
             <div className="flex items-center justify-center py-12">
-              <AlertCircle className="w-8 h-8 text-red-500 mr-2" />
-              <span className="text-red-500">{error}</span>
+              <AlertCircle className="w-8 h-8 text-destructive mr-2" />
+              <span className="text-destructive">{error}</span>
             </div>
           )}
 
           {!loading && !error && (
             <>
               {React.Children.count(children) > 0 ? (
-                <div className={gridClasses}>
-                  {children}
+                <div className={`grid gap-6 ${gridCols.default === 1 ? 'grid-cols-1' : gridCols.default === 2 ? 'grid-cols-1 md:grid-cols-2' : gridCols.default === 3 ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}>
+                  {React.Children.map(children, (child, index) => (
+                    <div key={index}>
+                      {child}
+                    </div>
+                  ))}
                 </div>
               ) : (
                 emptyState && (
@@ -191,7 +187,7 @@ export function PageLayout({
                     <CardContent>
                       <div className="text-muted-foreground">
                         {emptyState.icon}
-                        <h3 className="text-lg font-medium mb-2">{emptyState.title}</h3>
+                        <h3 className="text-lg font-semibold mb-2">{emptyState.title}</h3>
                         <p>{emptyState.description}</p>
                       </div>
                     </CardContent>
@@ -217,7 +213,8 @@ interface ContentCardProps {
 export function ContentCard({ children, onClick, className = "", hover = true }: ContentCardProps) {
   return (
     <Card
-      className={`${hover ? 'hover:shadow-lg transition-all duration-200' : ''} ${onClick ? 'cursor-pointer' : ''} ${className}`}
+      className={`${onClick ? 'cursor-pointer' : ''} ${className}`}
+      hover={hover}
       onClick={onClick}
     >
       {children}
@@ -246,49 +243,50 @@ export function UniversalCardHeader({
   onUserClick
 }: CardHeaderProps) {
   return (
-    <CardHeader className="pb-3">
-      <div className="flex items-start justify-between">
-        <div className="flex items-start gap-3">
-          {avatar && (
-            <div onClick={onUserClick} className={onUserClick ? "cursor-pointer hover:bg-muted/50 rounded-lg p-1 transition-colors" : ""}>
-              {avatar}
+    <div className="flex items-start justify-between p-6 pb-3">
+      <div className="flex items-start gap-3">
+        {avatar && (
+          <div
+            onClick={onUserClick}
+            className={onUserClick ? "cursor-pointer rounded p-1 hover:bg-muted/50 transition-colors" : ""}
+          >
+            {avatar}
+          </div>
+        )}
+
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <h3
+              className={`text-lg font-semibold leading-none tracking-tight ${onUserClick ? 'cursor-pointer hover:text-primary transition-colors' : ''}`}
+              onClick={onUserClick}
+            >
+              {title}
+            </h3>
+          </div>
+
+          {subtitle && (
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-sm font-medium text-muted-foreground">{subtitle}</span>
+              {badges.map((badge, index) => (
+                <React.Fragment key={index}>{badge}</React.Fragment>
+              ))}
             </div>
           )}
 
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
-              <h3
-                className={`font-semibold text-lg ${onUserClick ? 'hover:text-blue-600 transition-colors cursor-pointer' : ''}`}
-                onClick={onUserClick}
-              >
-                {title}
-              </h3>
+          {timestamp && (
+            <div className="text-xs text-muted-foreground">
+              {timestamp}
             </div>
-
-            {subtitle && (
-              <div className="flex items-center gap-2 mb-2">
-                <span className="font-medium text-sm">{subtitle}</span>
-                {badges.map((badge, index) => (
-                  <React.Fragment key={index}>{badge}</React.Fragment>
-                ))}
-              </div>
-            )}
-
-            {timestamp && (
-              <div className="text-xs text-muted-foreground">
-                {timestamp}
-              </div>
-            )}
-          </div>
+          )}
         </div>
-
-        {actions && (
-          <div className="text-right">
-            {actions}
-          </div>
-        )}
       </div>
-    </CardHeader>
+
+      {actions && (
+        <div className="text-right">
+          {actions}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -313,9 +311,9 @@ export function UniversalCardContent({
   actions
 }: CardContentProps) {
   return (
-    <CardContent>
+    <div className="p-6 pt-0">
       {description && (
-        <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
+        <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
           {description}
         </p>
       )}
@@ -334,7 +332,7 @@ export function UniversalCardContent({
 
       <div className="flex items-center justify-between">
         {metadata.length > 0 && (
-          <div className="flex items-center gap-6 text-sm text-muted-foreground">
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
             {metadata.map((item, index) => (
               <div key={index} className="flex items-center gap-1">
                 {item.icon}
@@ -350,6 +348,6 @@ export function UniversalCardContent({
           </div>
         )}
       </div>
-    </CardContent>
+    </div>
   );
 }

@@ -125,6 +125,7 @@ class WishlistController {
             user_id: wishlist.user_id._id.toString(), // Ensure it's a string
             username: wishlist.user_id.username,
             credibility_score: wishlist.user_id.credibility_score || 0,
+            avatar_url: wishlist.user_id.avatar_url,
             watchers: wishlist.watchers || 0,
             comment_count: commentCount,
             upvotes: wishlist.upvotes || 0,
@@ -220,6 +221,7 @@ class WishlistController {
           user_id: wishlist.user_id._id,
           username: wishlist.user_id.username,
           credibility_score: wishlist.user_id.credibility_score || 0,
+          avatar_url: wishlist.user_id.avatar_url,
           watchers: wishlist.watchers || 0,
           comment_count: commentCount,
           upvotes: wishlist.upvotes || 0,
@@ -361,6 +363,7 @@ class WishlistController {
           user_id: populatedWishlist.user_id._id,
           username: populatedWishlist.user_id.username,
           credibility_score: populatedWishlist.user_id.credibility_score || 0,
+          avatar_url: populatedWishlist.user_id.avatar_url,
           watchers: 0,
           comment_count: 0
         }
@@ -523,6 +526,7 @@ class WishlistController {
           user_id: populatedWishlist.user_id._id,
           username: populatedWishlist.user_id.username,
           credibility_score: populatedWishlist.user_id.credibility_score || 0,
+          avatar_url: populatedWishlist.user_id.avatar_url,
           watchers: populatedWishlist.watchers || 0,
           comment_count: commentCount
         }
@@ -679,7 +683,8 @@ class WishlistController {
         content: comment.content,
         created_at: comment.created_at,
         username: comment.user_id.username,
-        credibility_score: comment.user_id.credibility_score || 0
+        credibility_score: comment.user_id.credibility_score || 0,
+        avatar_url: comment.user_id.avatar_url
       }));
 
       res.json({ 
@@ -785,7 +790,8 @@ class WishlistController {
         content: populatedComment.content,
         created_at: populatedComment.created_at,
         username: populatedComment.user_id.username,
-        credibility_score: populatedComment.user_id.credibility_score || 0
+        credibility_score: populatedComment.user_id.credibility_score || 0,
+        avatar_url: populatedComment.user_id.avatar_url
       });
     } catch (error) {
       console.error('Error adding wishlist comment:', error);
@@ -843,6 +849,7 @@ class WishlistController {
             user_id: wishlist.user_id._id,
             username: wishlist.user_id.username,
             credibility_score: wishlist.user_id.credibility_score || 0,
+            avatar_url: wishlist.user_id.avatar_url,
             watchers: wishlist.watchers || 0,
             comment_count: commentCount,
             upvotes: wishlist.upvotes || 0,

@@ -2,10 +2,10 @@ import { User } from '../models/User.js';
 import { Trade } from '../models/Trade.js';
 import { Vouch } from '../models/Vouch.js';
 import { Wishlist } from '../models/Wishlist.js';
+import { MiddlemanVouch } from '../models/MiddlemanVouch.js';
 import mongoose from 'mongoose';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
-import { uploadToCloudinary, deleteFromCloudinary } from '../utils/cloudinaryUpload.js';
 
 export const userController = {
   // Get current user profile
@@ -59,7 +59,7 @@ export const userController = {
     }
   },
 
-  // Get user by ID
+      // Get user by ID
   getUserById: async (req, res) => {
     try {
       const { userId } = req.params;
@@ -73,12 +73,23 @@ export const userController = {
         return res.status(404).json({ error: 'User not found' });
       }
 
-      // Get user stats
-      const [totalTrades, completedTrades, totalVouches] = await Promise.all([
+      // Get user stats and vouches
+      const [totalTrades, completedTrades, tradeVouchCount, middlemanVouchCount, vouches, middlemanVouches] = await Promise.all([
         Trade.countDocuments({ user_id: userId }),
         Trade.countDocuments({ user_id: userId, status: 'completed' }),
-        Vouch.countDocuments({ user_id: userId })
+        Vouch.countDocuments({ vouched_user_id: userId }),
+        MiddlemanVouch.countDocuments({ middleman_id: userId }),
+        Vouch.find({ vouched_user_id: userId })
+          .populate('given_by_user_id', 'username avatar_url')
+          .sort({ created_at: -1 })
+          .limit(10), // Limit to recent 10 vouches for performance
+        MiddlemanVouch.find({ middleman_id: userId })
+          .populate('given_by_user_id', 'username avatar_url')
+          .sort({ created_at: -1 })
+          .limit(10) // Limit to recent 10 middleman vouches for performance
       ]);
+
+      const totalVouches = tradeVouchCount + middlemanVouchCount;
 
       res.json({
         user: {
@@ -102,7 +113,29 @@ export const userController = {
           completedTrades,
           totalVouches,
           successRate: totalTrades > 0 ? Math.round((completedTrades / totalTrades) * 100) : 0
-        }
+        },
+        vouches: vouches.map(vouch => ({
+          id: vouch._id,
+          rating: vouch.rating,
+          comment: vouch.comment,
+          given_by: {
+            id: vouch.given_by_user_id._id,
+            username: vouch.given_by_user_id.username,
+            avatar_url: vouch.given_by_user_id.avatar_url
+          },
+          created_at: vouch.createdAt
+        })),
+        middlemanVouches: middlemanVouches.map(vouch => ({
+          id: vouch._id,
+          rating: vouch.rating,
+          comment: vouch.comment,
+          given_by: {
+            id: vouch.given_by_user_id._id,
+            username: vouch.given_by_user_id.username,
+            avatar_url: vouch.given_by_user_id.avatar_url
+          },
+          created_at: vouch.createdAt
+        }))
       });
 
     } catch (error) {
@@ -209,30 +242,23 @@ export const userController = {
 
       const user = await User.findById(userId);
       if (!user) {
+        // Clean up uploaded file if user not found
+        if (fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
         return res.status(404).json({ error: 'User not found' });
       }
 
-      // Delete old avatar from Cloudinary if exists
+      // Delete old avatar if exists
       if (user.avatar_url) {
-        try {
-          // Extract public_id from Cloudinary URL
-          const urlParts = user.avatar_url.split('/');
-          const publicIdWithExtension = urlParts[urlParts.length - 1];
-          const publicId = publicIdWithExtension.split('.')[0];
-          const fullPublicId = `bloxmarket/avatars/${publicId}`;
-          
-          await deleteFromCloudinary(fullPublicId);
-        } catch (deleteError) {
-          console.error('Error deleting old avatar:', deleteError);
-          // Continue with upload even if delete fails
+        const oldAvatarPath = user.avatar_url.replace('/api/uploads/avatars/', './uploads/avatars/');
+        if (fs.existsSync(oldAvatarPath)) {
+          fs.unlinkSync(oldAvatarPath);
         }
       }
 
-      // Upload new avatar to Cloudinary
-      const uploadResult = await uploadToCloudinary(req.file, 'avatars');
-
-      // Update user with Cloudinary URL
-      user.avatar_url = uploadResult.secure_url;
+      // Update user with new avatar URL
+      user.avatar_url = `/api/uploads/avatars/${req.file.filename}`;
       await user.save();
 
       res.json({
@@ -393,6 +419,40 @@ export const userController = {
     } catch (error) {
       console.error('Request middleman error:', error);
       res.status(500).json({ error: 'Failed to request middleman status' });
+    }
+  },
+
+  // Search users
+  searchUsers: async (req, res) => {
+    try {
+      const { query } = req.params;
+      const limit = parseInt(req.query.limit) || 10;
+
+      if (!query || query.trim().length < 2) {
+        return res.status(400).json({ error: 'Search query must be at least 2 characters long' });
+      }
+
+      const users = await User.find({
+        $or: [
+          { username: { $regex: query, $options: 'i' } },
+          { display_name: { $regex: query, $options: 'i' } }
+        ]
+      })
+      .select('_id username display_name avatar_url')
+      .limit(limit);
+
+      res.json({
+        users: users.map(user => ({
+          user_id: user._id,
+          username: user.username,
+          display_name: user.display_name,
+          avatar_url: user.avatar_url
+        }))
+      });
+
+    } catch (error) {
+      console.error('Search users error:', error);
+      res.status(500).json({ error: 'Failed to search users' });
     }
   }
 };

@@ -27,6 +27,20 @@ const storage = multer.diskStorage({
   }
 });
 
+// Configure storage for face image uploads
+const faceStorage = multer.diskStorage({
+  destination: function(req, file, cb) {
+    const uploadDir = path.join(__dirname, '../uploads/middlemanface');
+    cb(null, uploadDir);
+  },
+  filename: function(req, file, cb) {
+    // Create a unique filename with original extension
+    const fileExt = file.originalname.split('.').pop();
+    const filename = `face_${uuidv4()}.${fileExt}`;
+    cb(null, filename);
+  }
+});
+
 // Configure upload options
 export const upload = multer({
   storage: storage,
@@ -41,6 +55,21 @@ export const upload = multer({
     cb(null, true);
   }
 }).array('documents', 5); // Allow up to 5 files
+
+// Configure face upload options
+export const uploadFace = multer({
+  storage: faceStorage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB max file size for face images
+  },
+  fileFilter: function(req, file, cb) {
+    // Accept images only
+    if (!file.originalname.match(/\.(jpg|jpeg|png)$/i)) {
+      return cb(new Error('Only image files (JPG, PNG) are allowed for face verification!'), false);
+    }
+    cb(null, true);
+  }
+}).array('faceImages', 3); // Allow up to 3 face images
 
 export const verificationController = {
   // Get all middleman applications (admin only)
@@ -239,6 +268,74 @@ export const verificationController = {
     } catch (error) {
       console.error('Error submitting middleman application:', error);
       res.status(500).json({ error: 'Failed to submit application: ' + error.message });
+    }
+  },
+
+  // Upload face images for verification
+  uploadFaceImages: async (req, res) => {
+    try {
+      console.log('Received face image upload request');
+      console.log('Face images received:', req.files ? req.files.length : 'none');
+
+      const userId = req.user.userId;
+
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'No face images provided' });
+      }
+
+      // Find the user's pending application
+      const pendingApplication = await MiddlemanApplication.findOne({
+        user_id: userId,
+        status: 'pending'
+      });
+
+      if (!pendingApplication) {
+        return res.status(400).json({ error: 'No pending middleman application found' });
+      }
+
+      // Create face image documents
+      const faceImageIds = [];
+      for (const file of req.files) {
+        console.log('Processing face image:', file.originalname);
+
+        const faceImage = new VerificationDocument({
+          user_id: userId,
+          document_type: 'face_verification',
+          filename: file.filename,
+          original_filename: file.originalname,
+          file_path: file.path,
+          mime_type: file.mimetype,
+          file_size: file.size,
+          description: 'Face verification image'
+        });
+
+        try {
+          await faceImage.save();
+          console.log('Face image saved:', faceImage._id);
+          faceImageIds.push(faceImage._id);
+        } catch (faceError) {
+          console.error('Error saving face image:', faceError);
+        }
+      }
+
+      // Link face images to the application
+      if (faceImageIds.length > 0) {
+        pendingApplication.documents = [
+          ...(pendingApplication.documents || []),
+          ...faceImageIds
+        ];
+        await pendingApplication.save();
+        console.log('Face images linked to application:', faceImageIds.length);
+      }
+
+      res.status(201).json({
+        message: 'Face images uploaded successfully',
+        faceImageIds,
+        uploadedCount: faceImageIds.length
+      });
+    } catch (error) {
+      console.error('Error uploading face images:', error);
+      res.status(500).json({ error: 'Failed to upload face images: ' + error.message });
     }
   },
   
@@ -605,7 +702,7 @@ export const verificationController = {
 
       // Ensure IDs are ObjectIds
       const middlemanObjectId = mongoose.Types.ObjectId.isValid(middlemanId) 
-        ? new mongoose.Types.ObjectId(middlemanId) 
+        ? new mongoose.Types.ObjectId(middlemanId)
         : middlemanId;
       const userObjectId = mongoose.Types.ObjectId.isValid(userId) 
         ? new mongoose.Types.ObjectId(userId) 
@@ -731,6 +828,172 @@ export const verificationController = {
     } catch (error) {
       console.error('Error checking user vouch status:', error);
       res.status(500).json({ error: 'Failed to check vouch status' });
+    }
+  },
+
+  // Delete completed application (admin only)
+  deleteApplication: async (req, res) => {
+    try {
+      const { applicationId } = req.params;
+      const adminId = req.user.userId;
+
+      console.log('Deleting application:', applicationId, 'by admin:', adminId);
+
+      const application = await MiddlemanApplication.findById(applicationId);
+
+      if (!application) {
+        console.log('Application not found:', applicationId);
+        return res.status(404).json({ error: 'Application not found' });
+      }
+
+      // Only allow deletion of completed applications
+      if (!['approved', 'rejected'].includes(application.status)) {
+        console.log('Application status not completed:', application.status);
+        return res.status(400).json({ error: 'Only completed applications can be deleted' });
+      }
+
+      console.log('Application found, status:', application.status);
+
+      // Delete associated documents from file system
+      if (application.documents && application.documents.length > 0) {
+        console.log('Deleting associated documents:', application.documents.length);
+
+        for (const docId of application.documents) {
+          try {
+            console.log('Processing document:', docId);
+            const document = await VerificationDocument.findById(docId);
+            if (document && document.file_path) {
+              console.log('Deleting file:', document.file_path);
+              // Delete file from uploads directory
+              const filePath = path.join(process.cwd(), document.file_path);
+              try {
+                await fs.unlink(filePath);
+                console.log('File deleted successfully:', filePath);
+              } catch (fileError) {
+                console.warn(`Failed to delete file ${filePath}:`, fileError.message);
+              }
+
+              // Delete document record
+              await VerificationDocument.findByIdAndDelete(docId);
+              console.log('Document record deleted:', docId);
+            } else {
+              console.log('Document not found or no file path:', docId);
+            }
+          } catch (docError) {
+            console.warn(`Failed to delete document ${docId}:`, docError.message);
+          }
+        }
+      } else {
+        console.log('No documents to delete');
+      }
+
+      // Delete the application
+      console.log('Deleting application record');
+      await MiddlemanApplication.findByIdAndDelete(applicationId);
+
+      console.log('Application deleted successfully');
+      res.status(200).json({
+        message: 'Application deleted successfully'
+      });
+    } catch (error) {
+      console.error('Error deleting middleman application:', error);
+      res.status(500).json({ error: 'Failed to delete application' });
+    }
+  },
+
+  // Bulk delete completed applications (admin only)
+  bulkDeleteApplications: async (req, res) => {
+    try {
+      const { applicationIds } = req.body;
+      const adminId = req.user.userId;
+
+      console.log('Bulk deleting applications:', applicationIds, 'by admin:', adminId);
+
+      if (!applicationIds || !Array.isArray(applicationIds) || applicationIds.length === 0) {
+        return res.status(400).json({ error: 'Application IDs array is required' });
+      }
+
+      if (applicationIds.length > 50) {
+        return res.status(400).json({ error: 'Cannot delete more than 50 applications at once' });
+      }
+
+      const results = {
+        successful: [],
+        failed: []
+      };
+
+      for (const applicationId of applicationIds) {
+        try {
+          console.log('Processing application:', applicationId);
+
+          const application = await MiddlemanApplication.findById(applicationId);
+
+          if (!application) {
+            console.log('Application not found:', applicationId);
+            results.failed.push({ id: applicationId, error: 'Application not found' });
+            continue;
+          }
+
+          // Only allow deletion of completed applications
+          if (!['approved', 'rejected'].includes(application.status)) {
+            console.log('Application status not completed:', application.status);
+            results.failed.push({ id: applicationId, error: 'Only completed applications can be deleted' });
+            continue;
+          }
+
+          // Delete associated documents from file system
+          if (application.documents && application.documents.length > 0) {
+            console.log('Deleting associated documents for:', applicationId);
+
+            for (const docId of application.documents) {
+              try {
+                console.log('Processing document:', docId);
+                const document = await VerificationDocument.findById(docId);
+                if (document && document.file_path) {
+                  console.log('Deleting file:', document.file_path);
+                  // Delete file from uploads directory
+                  const filePath = path.join(process.cwd(), document.file_path);
+                  try {
+                    await fs.unlink(filePath);
+                    console.log('File deleted successfully:', filePath);
+                  } catch (fileError) {
+                    console.warn(`Failed to delete file ${filePath}:`, fileError.message);
+                  }
+
+                  // Delete document record
+                  await VerificationDocument.findByIdAndDelete(docId);
+                  console.log('Document record deleted:', docId);
+                } else {
+                  console.log('Document not found or no file path:', docId);
+                }
+              } catch (docError) {
+                console.warn(`Failed to delete document ${docId}:`, docError.message);
+              }
+            }
+          }
+
+          // Delete the application
+          console.log('Deleting application record:', applicationId);
+          await MiddlemanApplication.findByIdAndDelete(applicationId);
+
+          results.successful.push(applicationId);
+          console.log('Application deleted successfully:', applicationId);
+
+        } catch (appError) {
+          console.error(`Error deleting application ${applicationId}:`, appError);
+          results.failed.push({ id: applicationId, error: appError.message });
+        }
+      }
+
+      console.log('Bulk delete completed. Successful:', results.successful.length, 'Failed:', results.failed.length);
+
+      res.status(200).json({
+        message: `Bulk delete completed. ${results.successful.length} successful, ${results.failed.length} failed`,
+        results
+      });
+    } catch (error) {
+      console.error('Error in bulk delete:', error);
+      res.status(500).json({ error: 'Failed to process bulk delete' });
     }
   }
 };

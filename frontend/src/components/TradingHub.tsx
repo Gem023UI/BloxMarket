@@ -7,7 +7,10 @@ import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Dialog, DialogContent, DialogFooter, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogBody } from './ui/dialog';
+import { PostModal } from './ui/post-modal';
+import type { PostModalPost } from './ui/post-modal';
 import { apiService } from '../services/api';
+import { alertService } from '../services/alertService';
 import { toast } from 'sonner';
 import { 
   Plus, 
@@ -111,18 +114,24 @@ const formatFullDate = (dateString: string): string => {
   }
 };
 
+// Helper function to get avatar URL
 const getAvatarUrl = (avatarUrl?: string) => {
   if (!avatarUrl) return '';
 
-  // If it's already a Cloudinary URL or external URL, return as is
   if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
     return avatarUrl;
   }
 
-  // If it's an old local path, construct Cloudinary URL or return empty
-  console.warn('Found local avatar path, should be migrated to Cloudinary:', avatarUrl);
-  return '';
+  if (avatarUrl.startsWith('/uploads/') || avatarUrl.startsWith('/api/uploads/')) {
+    return `http://localhost:5000${avatarUrl}`;
+  }
+
+  console.log('getAvatarUrl: Processing filename:', avatarUrl);
+  const fullUrl = `http://localhost:5000/api/uploads/avatars/${avatarUrl}`;
+  console.log('getAvatarUrl: Generated URL:', fullUrl);
+  return fullUrl;
 };
+
 interface Trade {
   trade_id: string;
   item_offered: string;
@@ -135,6 +144,7 @@ interface Trade {
   roblox_username: string;
   credibility_score: number;
   user_vouch_count?: number;
+  avatar_url?: string;
   images?: { image_url: string; uploaded_at: string }[];
   user_id?: string;
   upvotes?: number;
@@ -151,6 +161,7 @@ interface User {
   robloxUsername?: string;
   role?: string;
   vouch_count?: number;
+  avatar_url?: string;
 }
 
 interface TradeComment {
@@ -161,6 +172,7 @@ interface TradeComment {
   created_at: string;
   username: string;
   credibility_score?: number;
+  avatar_url?: string;
 }
 
 interface ImageDisplayProps {
@@ -173,7 +185,6 @@ interface ImageDisplayProps {
 function ImageDisplay({ src, alt, className, fallback }: ImageDisplayProps) {
   const [imageError, setImageError] = useState(false);
   const [imageLoading, setImageLoading] = useState(true);
-  const [retryCount, setRetryCount] = useState(0);
 
   const handleImageLoad = () => {
     setImageLoading(false);
@@ -182,46 +193,16 @@ function ImageDisplay({ src, alt, className, fallback }: ImageDisplayProps) {
 
   const handleImageError = () => {
     console.error('Image failed to load:', src);
-    
-    // First attempt: try the original URL
-    if (retryCount === 0) {
-      setTimeout(() => {
-        setRetryCount(prev => prev + 1);
-        setImageError(false);
-        setImageLoading(true);
-      }, 1000);
-    } 
-    // Second attempt: try to fix URL format if needed
-    else if (retryCount === 1) {
-      setTimeout(() => {
-        setRetryCount(prev => prev + 1);
-        setImageError(false);
-        setImageLoading(true);
-      }, 1000);
-    } else {
-      setImageLoading(false);
-      setImageError(true);
-    }
-  };
-
-  const handleRetry = () => {
-    setRetryCount(0);
-    setImageError(false);
-    setImageLoading(true);
+    setImageLoading(false);
+    setImageError(true);
   };
 
   if (imageError) {
     return fallback || (
       <div className={`bg-gray-100 dark:bg-gray-800 flex items-center justify-center ${className}`}>
         <div className="text-center text-gray-400">
-          <Upload className="w-8 h-8 mx-auto mb-1" />
-          <span className="text-xs block mb-1">Image unavailable</span>
-          <button
-            onClick={handleRetry}
-            className="text-xs text-blue-500 hover:text-blue-600 underline focus:outline-none"
-          >
-            Retry
-          </button>
+          <ImageIcon className="w-8 h-8 mx-auto mb-1" />
+          <span className="text-xs">Image unavailable</span>
         </div>
       </div>
     );
@@ -235,7 +216,7 @@ function ImageDisplay({ src, alt, className, fallback }: ImageDisplayProps) {
         </div>
       )}
       <img
-        src={retryCount === 2 ? src.replace(/^(https?:\/\/[^/]+)?(\/uploads\/trades\/)?(.+)$/, `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/uploads/trades/$3`) : `${src}${retryCount === 1 ? `?v=${retryCount}` : ''}`}
+        src={src}
         alt={alt}
         className={`w-full h-full object-cover rounded ${imageLoading ? 'opacity-0' : 'opacity-100'} transition-opacity duration-300`}
         onLoad={handleImageLoad}
@@ -414,7 +395,7 @@ function ReportModal({ post, isOpen, onClose }: { post: Trade | null; isOpen: bo
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Flag className="w-5 h-5 text-red-500" />
@@ -527,7 +508,8 @@ function TradeDetailsModal({ trade, isOpen, onClose, onEdit, onDelete, canEdit, 
             content: comment.content as string,
             created_at: createdAt as string,
             username: (comment.user as Record<string, string>).username,
-            credibility_score: (comment.user as Record<string, number>).credibility_score
+            credibility_score: (comment.user as Record<string, number>).credibility_score,
+            avatar_url: (comment.user as Record<string, string>).avatar_url || ''
           };
         });
         setComments(mappedComments);
@@ -593,7 +575,7 @@ function TradeDetailsModal({ trade, isOpen, onClose, onEdit, onDelete, canEdit, 
       // Dispatch event to update notifications
       window.dispatchEvent(new CustomEvent('notification-created'));
     } catch (error) {
-      console.error('Failed to upvote:', error);
+      console.error('You cannot vote on your own trade:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       if (errorMessage.includes('cannot vote on your own trade')) {
         toast.error('You cannot vote on your own trade');
@@ -637,7 +619,7 @@ function TradeDetailsModal({ trade, isOpen, onClose, onEdit, onDelete, canEdit, 
       // Dispatch event to update notifications
       window.dispatchEvent(new CustomEvent('notification-created'));
     } catch (error) {
-      console.error('Failed to downvote:', error);
+      console.error('You cannot vote on your own trade:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       if (errorMessage.includes('cannot vote on your own trade')) {
         toast.error('You cannot vote on your own trade');
@@ -689,7 +671,7 @@ function TradeDetailsModal({ trade, isOpen, onClose, onEdit, onDelete, canEdit, 
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span>Trade Details</span>
@@ -704,7 +686,7 @@ function TradeDetailsModal({ trade, isOpen, onClose, onEdit, onDelete, canEdit, 
           <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-lg">
             <Avatar className="w-12 h-12">
               <AvatarImage
-                src={getAvatarUrl('')}
+                src={getAvatarUrl(trade.avatar_url)}
                 className="object-cover"
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
@@ -859,7 +841,7 @@ function TradeDetailsModal({ trade, isOpen, onClose, onEdit, onDelete, canEdit, 
             <div className="flex gap-3 p-4 border rounded-lg bg-muted/20">
               <Avatar className="w-8 h-8">
                 <AvatarImage
-                  src={getAvatarUrl('')}
+                  src={getAvatarUrl(currentUser?.avatar_url)}
                   className="object-cover"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
@@ -867,7 +849,7 @@ function TradeDetailsModal({ trade, isOpen, onClose, onEdit, onDelete, canEdit, 
                   }}
                 />
                 <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-600 text-white text-sm">
-                  Y
+                  {currentUser?.username?.[0]?.toUpperCase() || 'Y'}
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1 flex gap-2">
@@ -904,7 +886,7 @@ function TradeDetailsModal({ trade, isOpen, onClose, onEdit, onDelete, canEdit, 
                   <div key={comment.comment_id} className="flex gap-3 p-3 border rounded-lg">
                     <Avatar className="w-8 h-8">
                       <AvatarImage
-                        src={getAvatarUrl('')}
+                        src={getAvatarUrl(comment.avatar_url)}
                         className="object-cover"
                         onError={(e) => {
                           const target = e.target as HTMLImageElement;
@@ -1070,6 +1052,9 @@ export function TradingHub() {
   // Modal states (for viewing images and trade details)
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [isTradeDetailsOpen, setIsTradeDetailsOpen] = useState(false);
+  // Post modal (Dashboard-style) state
+  const [selectedPostForModal, setSelectedPostForModal] = useState<PostModalPost | null>(null);
+  const [isPostModalOpen, setIsPostModalOpen] = useState(false);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [modalSelectedImages, setModalSelectedImages] = useState<{ image_url: string; uploaded_at: string }[]>([]);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
@@ -1116,6 +1101,7 @@ export function TradingHub() {
           _id?: string;
           vouch_count?: number;
           credibility_score?: number;
+          avatar_url?: string;
         };
         username?: string;
         roblox_username?: string;
@@ -1201,6 +1187,7 @@ export function TradingHub() {
             roblox_username: (trade.user?.roblox_username as string) || (trade.roblox_username as string) || '',
             credibility_score: (trade.user?.credibility_score as number) ?? (trade.credibility_score as number) ?? 0,
             user_vouch_count: (trade.user?.vouch_count as number) ?? 0,
+            avatar_url: (trade.user?.avatar_url as string) || '',
             user_id: (trade.user?._id as string) || (trade.user_id as string) || '',
             images: processedImages,
             upvotes: Array.isArray(trade.upvotes) ? trade.upvotes.length : (trade.upvotes as number) || 0,
@@ -1258,7 +1245,8 @@ export function TradingHub() {
           email: me.email,
           robloxUsername: me.roblox_username,
           role: me.role,
-          vouch_count: me.vouch_count
+          vouch_count: me.vouch_count,
+          avatar_url: me.avatar_url
         });
       } catch (err) {
         console.error('Failed to refresh current user:', err);
@@ -1352,7 +1340,7 @@ export function TradingHub() {
     });
 
     if (validFiles.length > 0) {
-      // Clean up existing object URLs to prevent memory leaks (only revoke blob URLs)
+      // Clean up existing blob URLs to prevent memory leaks (only revoke blob URLs)
       editImagePreviewUrls.forEach(url => {
         if (url && url.startsWith('blob:')) {
           URL.revokeObjectURL(url);
@@ -1365,6 +1353,11 @@ export function TradingHub() {
       // Create preview URLs using URL.createObjectURL for better performance
       const newPreviewUrls = validFiles.map(file => URL.createObjectURL(file));
       setEditImagePreviewUrls(newPreviewUrls);
+      
+      // Reset the file input to allow selecting the same files again
+      if (e.target) {
+        e.target.value = '';
+      }
     }
   };
 
@@ -1385,6 +1378,34 @@ export function TradingHub() {
   const handleTradeClick = (trade: Trade) => {
     setSelectedTrade(trade);
     setIsTradeDetailsOpen(true);
+  };
+
+  // Map a Trade to the PostModalPost shape
+  const mapTradeToPost = (trade: Trade): PostModalPost => ({
+    id: trade.trade_id,
+    type: 'trade',
+    title: `Trading ${trade.item_offered}${trade.item_requested ? ` for ${trade.item_requested}` : ''}`,
+    description: trade.description || '',
+    user: {
+      id: trade.user_id || '',
+      username: trade.username,
+      robloxUsername: trade.roblox_username,
+      rating: Math.min(5, Math.max(1, Math.floor((trade.credibility_score || 0) / 20))),
+      vouchCount: trade.vouch_count || 0,
+      verified: false,
+      moderator: false,
+      avatar_url: trade.avatar_url || ''
+    },
+    timestamp: trade.created_at,
+    images: (trade.images || []).map(img => ({ url: `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}${img.image_url.startsWith('/') ? img.image_url : `/uploads/trades/${img.image_url}`}`, type: 'trade' })),
+    comments: trade.comment_count || 0,
+    upvotes: trade.upvotes || 0,
+    downvotes: trade.downvotes || 0
+  });
+
+  const openPostModal = (trade: Trade) => {
+    setSelectedPostForModal(mapTradeToPost(trade));
+    setIsPostModalOpen(true);
   };
 
   const handleImageClick = (images: { image_url: string; uploaded_at: string }[], index: number) => {
@@ -1430,7 +1451,7 @@ export function TradingHub() {
   };
 
   const handleDeleteTrade = async (tradeId: string, tradeTitle: string) => {
-    const confirmed = window.confirm(`Are you sure you want to delete the trade "${tradeTitle}"?`);
+    const confirmed = await alertService.confirm(`Are you sure you want to delete the trade "${tradeTitle}"?`);
     if (!confirmed) return;
 
     try {
@@ -1982,11 +2003,11 @@ export function TradingHub() {
                       e.currentTarget.classList.remove('border-blue-500', 'bg-blue-50');
                       const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('image/'));
                       if (files.length > 0) {
-                        const input = document.getElementById('edit-image-upload') as HTMLInputElement;
-                        const dt = new DataTransfer();
-                        files.forEach(file => dt.items.add(file));
-                        input.files = dt.files;
-                        handleEditImageSelect({ target: input } as React.ChangeEvent<HTMLInputElement>);
+                        // Create a synthetic event
+                        const syntheticEvent = {
+                          target: { files: files }
+                        } as unknown as React.ChangeEvent<HTMLInputElement>;
+                        handleEditImageSelect(syntheticEvent);
                       }
                     }}
                   >
@@ -1997,23 +2018,23 @@ export function TradingHub() {
                       onChange={handleEditImageSelect}
                       className="hidden"
                       id="edit-image-upload"
-                      disabled={editUploadSelectedImages.length >= 5}
+                      disabled={editImagePreviewUrls.length >= 5}
                     />
                     <label
                       htmlFor="edit-image-upload"
                       className={`cursor-pointer flex flex-col items-center gap-2 ${
-                        editUploadSelectedImages.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''
+                        editImagePreviewUrls.length >= 5 ? 'opacity-50 cursor-not-allowed' : ''
                       }`}
                     >
                       <Upload className="w-8 h-8 text-gray-400" />
                       <span className="text-sm text-gray-600 dark:text-gray-300">
-                        {editUploadSelectedImages.length >= 5 
+                        {editImagePreviewUrls.length >= 5 
                           ? 'Maximum 5 images reached' 
                           : 'Click to upload images or drag and drop'
                         }
                       </span>
                       <span className="text-xs text-gray-500 dark:text-gray-400">
-                        PNG, JPG, GIF up to 5MB each • {editUploadSelectedImages.length}/5 selected
+                        PNG, JPG, GIF up to 5MB each • {editImagePreviewUrls.length}/5 selected
                       </span>
                     </label>
                   </div>
@@ -2091,7 +2112,7 @@ export function TradingHub() {
               placeholder="Search trades..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="max-w-sm"
+              className="max-w-md"
             />
           </div>
           
@@ -2167,14 +2188,14 @@ export function TradingHub() {
                 <Card 
                   key={trade.trade_id} 
                   className="hover:shadow-lg transition-shadow cursor-pointer"
-                  onClick={() => handleTradeClick(trade)}
+                  onClick={() => openPostModal(trade)}
                 >
                   <CardHeader>
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
                         <Avatar className="w-10 h-10">
                           <AvatarImage
-                            src={getAvatarUrl()}
+                            src={getAvatarUrl(trade.avatar_url)}
                             className="object-cover"
                             onError={(e) => {
                               const target = e.target as HTMLImageElement;
@@ -2473,6 +2494,15 @@ export function TradingHub() {
           />
         </DialogContent>
       </Dialog>
+
+      {/* Dashboard-style Post Modal (reused from Dashboard) */}
+      <PostModal
+        post={selectedPostForModal}
+        isOpen={isPostModalOpen}
+        onClose={() => { setIsPostModalOpen(false); setSelectedPostForModal(null); }}
+        onUserClick={(userId: string) => setAppCurrentPage(`profile-${userId}`)}
+        onReportClick={() => setIsReportModalOpen(true)}
+      />
 
       <ReportModal
         post={selectedTrade}

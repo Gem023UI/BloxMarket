@@ -135,7 +135,7 @@ export const tradeController = {
       console.log('Trade created successfully:', savedTrade._id);
 
       // Populate user data for the response
-      await savedTrade.populate('user_id', 'username roblox_username credibility_score vouch_count avatar_url');
+      await savedTrade.populate('user_id', 'username roblox_username credibility_score vouch_count');
 
       // Get initial vote/comment counts (should be 0 for new trade)
       const [commentCount, upvotes, downvotes, vouchCount] = await Promise.all([
@@ -163,7 +163,7 @@ export const tradeController = {
             roblox_username: savedTrade.user_id.roblox_username,
             credibility_score: savedTrade.user_id.credibility_score,
             vouch_count: savedTrade.user_id.vouch_count,
-            avatar_url: trade.user_id.avatar_url
+            avatar_url: savedTrade.user_id.avatar_url
           },
           images: savedTrade.images || [],
           comment_count: commentCount,
@@ -253,6 +253,9 @@ export const tradeController = {
       const { tradeId } = req.params;
       const userId = req.user.userId;
       const { itemOffered, itemRequested, description, status, category } = req.body;
+      const uploadedFiles = req.files;
+
+      console.log('Update trade request:', { tradeId, itemOffered, itemRequested, status, category, filesCount: uploadedFiles?.length || 0 });
 
       if (!mongoose.Types.ObjectId.isValid(tradeId)) {
         return res.status(400).json({ error: 'Invalid trade ID' });
@@ -265,15 +268,59 @@ export const tradeController = {
 
       // Check if user owns the trade
       if (trade.user_id.toString() !== userId) {
+        // Clean up uploaded files if user doesn't own the trade
+        if (uploadedFiles && uploadedFiles.length > 0) {
+          uploadedFiles.forEach(file => {
+            try {
+              if (fs.existsSync(file.path)) {
+                fs.unlinkSync(file.path);
+              }
+            } catch (err) {
+              console.error('Error deleting file:', err);
+            }
+          });
+        }
         return res.status(403).json({ error: 'You can only update your own trades' });
       }
 
-      // Update fields
+      // Update text fields
       if (itemOffered !== undefined) trade.item_offered = itemOffered.trim();
       if (itemRequested !== undefined) trade.item_requested = itemRequested.trim();
       if (description !== undefined) trade.description = description.trim();
       if (status !== undefined) trade.status = status;
       if (category !== undefined) trade.category = category;
+
+      // Handle image updates - replace existing images with new ones
+      if (uploadedFiles && uploadedFiles.length > 0) {
+        // Delete existing images from filesystem
+        if (trade.images && trade.images.length > 0) {
+          trade.images.forEach(image => {
+            try {
+              if (fs.existsSync(image.path)) {
+                fs.unlinkSync(image.path);
+              }
+            } catch (err) {
+              console.error('Error deleting old image file:', err);
+            }
+          });
+        }
+
+        // Process new uploaded images
+        const images = [];
+        uploadedFiles.forEach(file => {
+          images.push({
+            image_url: `/uploads/trades/${file.filename}`,
+            filename: file.filename,
+            originalName: file.originalname,
+            path: file.path,
+            size: file.size,
+            mimetype: file.mimetype,
+            uploaded_at: new Date()
+          });
+        });
+
+        trade.images = images;
+      }
 
       await trade.save();
 
@@ -318,6 +365,20 @@ export const tradeController = {
 
     } catch (error) {
       console.error('Update trade error:', error);
+      
+      // Clean up uploaded files on error
+      if (req.files && req.files.length > 0) {
+        req.files.forEach(file => {
+          try {
+            if (fs.existsSync(file.path)) {
+              fs.unlinkSync(file.path);
+            }
+          } catch (err) {
+            console.error('Error deleting file during cleanup:', err);
+          }
+        });
+      }
+      
       res.status(500).json({ error: 'Failed to update trade' });
     }
   },
@@ -403,7 +464,7 @@ export const tradeController = {
             username: comment.user_id.username,
             roblox_username: comment.user_id.roblox_username,
             credibility_score: comment.user_id.credibility_score,
-            avatar_url: trade.user_id.avatar_url
+            avatar_url: comment.user_id.avatar_url
           }
         })),
         pagination: {
@@ -448,7 +509,7 @@ export const tradeController = {
       });
 
       const savedComment = await newComment.save();
-      await savedComment.populate('user_id', 'username roblox_username credibility_score avatar_url');
+      await savedComment.populate('user_id', 'username roblox_username credibility_score');
 
       // Create notification for trade owner (if not commenting on own trade)
       if (!trade.user_id.equals(userId)) {
@@ -479,7 +540,7 @@ export const tradeController = {
             username: savedComment.user_id.username,
             roblox_username: savedComment.user_id.roblox_username,
             credibility_score: savedComment.user_id.credibility_score,
-            avatar_url: trade.user_id.avatar_url
+            avatar_url: savedComment.user_id.avatar_url
           }
         }
       });

@@ -2,13 +2,14 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardFooter } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { Avatar, AvatarFallback } from './ui/avatar';
+import { Avatar, AvatarImage, AvatarFallback } from './ui/avatar';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { apiService } from '../services/api';
+import { alertService } from '../services/alertService';
 import { 
   Plus, 
   Search, 
@@ -32,6 +33,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth, useApp } from '../App';
+import { PostModal } from './ui/post-modal';
+import type { PostModalPost } from './ui/post-modal';
 
 interface WishlistItem {
   wishlist_id: string;
@@ -44,7 +47,7 @@ interface WishlistItem {
   updated_at?: string;
   user_id: string;
   username: string;
-
+  avatar_url?: string;
   watchers?: number;
   comment_count?: number;
   upvotes?: number;
@@ -59,7 +62,7 @@ interface WishlistComment {
   content: string;
   created_at: string;
   username: string;
-
+  avatar_url?: string;
 }
 
 interface User {
@@ -68,6 +71,7 @@ interface User {
   email: string;
   robloxUsername?: string;
   role?: string;
+  avatar_url?: string;
 }
 
 interface WishlistDetailsModalProps {
@@ -81,6 +85,7 @@ interface WishlistDetailsModalProps {
   deleteLoading: boolean;
   onReport?: (wishlist: WishlistItem) => void;
   onUserClick?: (userId: string) => void;
+  currentUser?: User | null;
 }
 
 interface ReportModalProps {
@@ -111,6 +116,49 @@ const formatDate = (dateString: string): string => {
   }
 };
 
+// Helper function to get avatar URL
+const getAvatarUrl = (avatarUrl?: string) => {
+  if (!avatarUrl) return '';
+
+  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
+    return avatarUrl;
+  }
+
+  if (avatarUrl.startsWith('/uploads/') || avatarUrl.startsWith('/api/uploads/')) {
+    return `http://localhost:5000${avatarUrl}`;
+  }
+
+  console.log('getAvatarUrl: Processing filename:', avatarUrl);
+  const fullUrl = `http://localhost:5000/api/uploads/avatars/${avatarUrl}`;
+  console.log('getAvatarUrl: Generated URL:', fullUrl);
+  return fullUrl;
+};
+
+// Helper function to transform WishlistItem to PostModalPost
+const transformWishlistToPostModal = (wishlist: WishlistItem): PostModalPost => {
+  return {
+    id: wishlist.wishlist_id,
+    type: 'wishlist',
+    title: wishlist.item_name,
+    description: wishlist.description || 'No description provided',
+    user: {
+      id: wishlist.user_id,
+      username: wishlist.username,
+      avatar_url: getAvatarUrl(wishlist.avatar_url),
+      verified: false, // You might want to add this field to WishlistItem
+      moderator: false, // You might want to add this field to WishlistItem
+    },
+    timestamp: formatDate(wishlist.created_at),
+    images: wishlist.images?.map(img => ({
+      url: `http://localhost:5000/uploads/wishlists/${img.filename}`,
+      type: 'wishlist' as const
+    })) || [],
+    comments: wishlist.comment_count || 0,
+    upvotes: wishlist.upvotes || 0,
+    downvotes: wishlist.downvotes || 0,
+  };
+};
+
   // Enhanced Wishlist Details Modal Component with upvote/downvote and comments
 function WishlistDetailsModal({ 
   wishlist, 
@@ -122,7 +170,8 @@ function WishlistDetailsModal({
   canDelete, 
   deleteLoading,
   onReport,
-  onUserClick 
+  onUserClick,
+  currentUser
 }: WishlistDetailsModalProps) {
   const [comments, setComments] = useState<WishlistComment[]>([]);
   const [newComment, setNewComment] = useState('');
@@ -133,13 +182,7 @@ function WishlistDetailsModal({
   const [userVote, setUserVote] = useState<'up' | 'down' | null>(null);
   const [votingLoading, setVotingLoading] = useState(false);
   const [imageDeleteLoading, setImageDeleteLoading] = useState<string | null>(null);  // Load wishlist comments and votes when modal opens
-  useEffect(() => {
-    if (isOpen && wishlist) {
-      loadWishlistData();
-    }
-  }, [isOpen, wishlist]);
-
-  const loadWishlistData = async () => {
+  const loadWishlistData = useCallback(async () => {
     if (!wishlist) return;
 
     try {
@@ -156,10 +199,16 @@ function WishlistDetailsModal({
       if (commentsResponse.status === 'fulfilled') {
         console.log('Comments response:', commentsResponse.value);
         if (commentsResponse.value?.comments && Array.isArray(commentsResponse.value.comments)) {
-          setComments(commentsResponse.value.comments);
+          setComments(commentsResponse.value.comments.map((comment: any) => ({
+            ...comment,
+            avatar_url: comment.avatar_url || ''
+          })));
         } else if (Array.isArray(commentsResponse.value)) {
           // If the response is directly an array of comments
-          setComments(commentsResponse.value);
+          setComments(commentsResponse.value.map((comment: any) => ({
+            ...comment,
+            avatar_url: comment.avatar_url || ''
+          })));
         } else {
           console.warn('Unexpected comments response structure:', commentsResponse.value);
           setComments([]);
@@ -189,7 +238,13 @@ function WishlistDetailsModal({
     } finally {
       setLoadingComments(false);
     }
-  };
+  }, [wishlist]);
+
+  useEffect(() => {
+    if (isOpen && wishlist) {
+      loadWishlistData();
+    }
+  }, [isOpen, wishlist, loadWishlistData]);
 
   const handleUpvote = async () => {
     if (!wishlist || votingLoading) return;
@@ -276,7 +331,8 @@ function WishlistDetailsModal({
   const handleDeleteImage = async (filename: string) => {
     if (!wishlist || !canEdit) return;
     
-    if (!confirm('Are you sure you want to delete this image? This action cannot be undone.')) {
+    const confirmed = await alertService.confirm('Are you sure you want to delete this image? This action cannot be undone.');
+    if (!confirmed) {
       return;
     }
     
@@ -316,6 +372,7 @@ function WishlistDetailsModal({
           {/* Author Info */}
           <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-lg">
             <Avatar className="w-12 h-12">
+              <AvatarImage src={getAvatarUrl(wishlist.avatar_url)} />
               <AvatarFallback>{wishlist.username?.[0] || 'U'}</AvatarFallback>
             </Avatar>
             <div className="flex-1">
@@ -480,8 +537,9 @@ function WishlistDetailsModal({
             {/* Add Comment */}
             <div className="flex gap-3 p-4 border rounded-lg bg-muted/20">
               <Avatar className="w-8 h-8">
+                <AvatarImage src={getAvatarUrl(currentUser?.avatar_url)} />
                 <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-600 text-white text-sm">
-                  Y
+                  {currentUser?.username?.[0]?.toUpperCase() || 'Y'}
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1 flex gap-2">
@@ -517,6 +575,7 @@ function WishlistDetailsModal({
                 comments.map((comment) => (
                   <div key={comment.comment_id} className="flex gap-3 p-3 border rounded-lg">
                     <Avatar className="w-8 h-8">
+                      <AvatarImage src={getAvatarUrl(comment.avatar_url)} />
                       <AvatarFallback className="bg-gradient-to-br from-purple-500 to-pink-500 text-white text-sm">
                         {comment.username[0]?.toUpperCase()}
                       </AvatarFallback>
@@ -683,7 +742,7 @@ function ReportModal({ isOpen, onClose, onSubmit, wishlistId }: ReportModalProps
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Flag className="w-5 h-5 text-red-500" />
@@ -779,6 +838,10 @@ export function Wishlist() {
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [selectedWishlistForReport, setSelectedWishlistForReport] = useState<WishlistItem | null>(null);
   
+  // Voting state
+  const [votingLoading, setVotingLoading] = useState<string | null>(null);
+  const [userWishlistVotes, setUserWishlistVotes] = useState<Map<string, 'up' | 'down' | null>>(new Map());
+  
   const [newWishlist, setNewWishlist] = useState({
     itemName: '',
     description: '',
@@ -813,7 +876,10 @@ export function Wishlist() {
     const loadCurrentUser = async () => {
       try {
         const user = await apiService.getCurrentUser();
-        setCurrentUser(user);
+        setCurrentUser({
+          ...user,
+          avatar_url: user.avatar_url || ''
+        });
         console.log('Current user loaded:', user);
       } catch (err) {
         console.error('Failed to load current user:', err);
@@ -845,7 +911,10 @@ export function Wishlist() {
       
       // Handle the response structure properly
       if (response && response.wishlists && Array.isArray(response.wishlists)) {
-        setWishlistItems(response.wishlists);
+        setWishlistItems(response.wishlists.map((item: any) => ({
+          ...item,
+          avatar_url: item.avatar_url || ''
+        })));
         
         // Set pagination if available
         if (response.pagination) {
@@ -858,7 +927,10 @@ export function Wishlist() {
         }
       } else if (Array.isArray(response)) {
         // If response is directly an array
-        setWishlistItems(response);
+        setWishlistItems(response.map((item: any) => ({
+          ...item,
+          avatar_url: item.avatar_url || ''
+        })));
       } else {
         // Fallback to empty array
         console.warn('Unexpected wishlist response structure:', response);
@@ -876,6 +948,36 @@ export function Wishlist() {
   useEffect(() => {
     loadWishlists();
   }, [loadWishlists]);
+
+  // Load user's wishlist votes when component mounts or wishlists change
+  useEffect(() => {
+    const loadUserVotes = async () => {
+      if (!currentUser || wishlistItems.length === 0) return;
+
+      try {
+        const votesMap = new Map<string, 'up' | 'down' | null>();
+        
+        // Load votes for each wishlist
+        for (const item of wishlistItems) {
+          try {
+            const response = await apiService.getWishlistVotes(item.wishlist_id);
+            votesMap.set(item.wishlist_id, response.userVote || null);
+          } catch (error) {
+            console.warn(`Could not load vote status for wishlist ${item.wishlist_id}:`, error);
+            votesMap.set(item.wishlist_id, null);
+          }
+        }
+        
+        setUserWishlistVotes(votesMap);
+      } catch (error) {
+        console.error('Failed to load user votes:', error);
+      }
+    };
+
+    if (currentUser && wishlistItems.length > 0) {
+      loadUserVotes();
+    }
+  }, [currentUser, wishlistItems]);
 
   // Permission functions - UPDATE THESE
   const canEditWishlist = (wishlist: WishlistItem) => {
@@ -936,20 +1038,6 @@ export function Wishlist() {
     setCurrentPage(`profile-${userId}`);
   };
 
-  const handleEditFromModal = () => {
-    if (selectedWishlist) {
-      setIsDetailsDialogOpen(false);
-      handleEditWishlist(selectedWishlist);
-    }
-  };
-
-  const handleDeleteFromModal = () => {
-    if (selectedWishlist) {
-      setIsDetailsDialogOpen(false);
-      handleDeleteWishlist(selectedWishlist.wishlist_id, selectedWishlist.item_name);
-    }
-  };
-
   const handleReportWishlist = (wishlist: WishlistItem) => {
     setSelectedWishlistForReport(wishlist);
     setIsReportModalOpen(true);
@@ -995,6 +1083,79 @@ export function Wishlist() {
       }
       
       toast.error('Failed to submit report', { description: errorMessage });
+    }
+  };
+
+  // Voting functions
+  const handleUpvoteWishlist = async (wishlistId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    if (!currentUser) {
+      toast.error('Please log in to vote');
+      return;
+    }
+
+    try {
+      setVotingLoading(wishlistId);
+      
+      const response = await apiService.voteWishlist(wishlistId, 'up');
+      
+      // Update local state
+      setUserWishlistVotes(prev => new Map(prev).set(wishlistId, response.userVote));
+      setWishlistItems(prev => prev.map(item => 
+        item.wishlist_id === wishlistId 
+          ? { ...item, upvotes: response.upvotes, downvotes: response.downvotes }
+          : item
+      ));
+      
+      if (response.userVote === 'up') {
+        toast.success('Upvoted!');
+      } else if (response.userVote === null) {
+        toast.success('Vote removed!');
+      } else {
+        toast.success('Changed to upvote!');
+      }
+    } catch (error) {
+      console.error('Failed to upvote:', error);
+      toast.error('Failed to update vote');
+    } finally {
+      setVotingLoading(null);
+    }
+  };
+
+  const handleDownvoteWishlist = async (wishlistId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    if (!currentUser) {
+      toast.error('Please log in to vote');
+      return;
+    }
+
+    try {
+      setVotingLoading(wishlistId);
+      
+      const response = await apiService.voteWishlist(wishlistId, 'down');
+      
+      // Update local state
+      setUserWishlistVotes(prev => new Map(prev).set(wishlistId, response.userVote));
+      setWishlistItems(prev => prev.map(item => 
+        item.wishlist_id === wishlistId 
+          ? { ...item, upvotes: response.upvotes, downvotes: response.downvotes }
+          : item
+      ));
+      
+      if (response.userVote === 'down') {
+        toast.success('Downvoted!');
+      } else if (response.userVote === null) {
+        toast.success('Vote removed!');
+      } else {
+        toast.success('Changed to downvote!');
+      }
+    } catch (error) {
+      console.error('Failed to downvote:', error);
+      toast.error('Failed to update vote');
+    } finally {
+      setVotingLoading(null);
     }
   };
 
@@ -1186,7 +1347,8 @@ export function Wishlist() {
   };
 
   const handleDeleteWishlist = async (wishlistId: string, itemName: string) => {
-    if (!confirm(`Are you sure you want to delete "${itemName}" from your wishlist? This action cannot be undone.`)) {
+    const confirmed = await alertService.confirm(`Are you sure you want to delete "${itemName}" from your wishlist? This action cannot be undone.`);
+    if (!confirmed) {
       return;
     }
 
@@ -1261,7 +1423,7 @@ export function Wishlist() {
                   Add to Wishlist
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg">
+              <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Add Item to Wishlist</DialogTitle>
                   <DialogDescription>
@@ -1416,7 +1578,7 @@ export function Wishlist() {
 
       {/* Edit Post Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Wishlist Item</DialogTitle>
             <DialogDescription>
@@ -1576,7 +1738,7 @@ export function Wishlist() {
               placeholder="Search wishlist items..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="max-w-sm"
+              className="max-w-md"
             />
           </div>
           
@@ -1641,6 +1803,7 @@ export function Wishlist() {
                 <div className="flex items-start justify-between">
                   <div className="flex items-start gap-3" onClick={() => handleWishlistClick(item)}>
                     <Avatar className="w-12 h-12">
+                      <AvatarImage src={getAvatarUrl(item.avatar_url)} />
                       <AvatarFallback>{item.username?.[0] || 'U'}</AvatarFallback>
                     </Avatar>
                     
@@ -1666,6 +1829,35 @@ export function Wishlist() {
                       <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
                         {item.description || 'No description provided'}
                       </p>
+                      
+                      {/* Image Preview */}
+                      {item.images && item.images.length > 0 && (
+                        <div className="flex gap-2 mb-3 overflow-x-auto">
+                          {item.images.slice(0, 3).map((image, imgIndex) => (
+                            <div key={imgIndex} className="relative flex-shrink-0">
+                              <img 
+                                src={`${window.location.protocol}//${window.location.hostname}:5000/uploads/wishlists/${image.filename}`}
+                                alt={`Preview ${imgIndex + 1}`}
+                                className="w-16 h-16 object-cover rounded-md border hover:scale-105 transition-transform cursor-pointer"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  window.open(`${window.location.protocol}//${window.location.hostname}:5000/uploads/wishlists/${image.filename}`, '_blank');
+                                }}
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).src = 'https://via.placeholder.com/64?text=Img';
+                                }}
+                              />
+                              {item.images!.length > 3 && imgIndex === 2 && (
+                                <div className="absolute inset-0 bg-black/60 rounded-md flex items-center justify-center">
+                                  <span className="text-white text-xs font-medium">
+                                    +{item.images!.length - 3}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       
                       {/* Category */}
                       <div className="flex flex-wrap gap-1 mb-3">
@@ -1703,13 +1895,27 @@ export function Wishlist() {
                   
                   <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-1">
-                      <Button variant="ghost" size="sm" className="h-8 px-2 text-green-600 hover:text-green-700 hover:bg-green-50 dark:hover:bg-green-950">
-                        <ArrowUp className="w-4 h-4" />
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className={`h-8 px-2 ${userWishlistVotes.get(item.wishlist_id) === 'up' ? 'text-green-600 bg-green-50 dark:bg-green-950' : 'text-muted-foreground hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-950'} transition-colors`}
+                        onClick={(e) => handleUpvoteWishlist(item.wishlist_id, e)}
+                        disabled={votingLoading === item.wishlist_id}
+                      >
+                        <ArrowUp className={`w-4 h-4 ${userWishlistVotes.get(item.wishlist_id) === 'up' ? 'fill-current' : ''}`} />
                         <span className="ml-1">{item.upvotes || 0}</span>
+                        {votingLoading === item.wishlist_id && <Loader2 className="w-3 h-3 animate-spin ml-1" />}
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-8 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950">
-                        <ArrowDown className="w-4 h-4" />
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className={`h-8 px-2 ${userWishlistVotes.get(item.wishlist_id) === 'down' ? 'text-red-600 bg-red-50 dark:bg-red-950' : 'text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950'} transition-colors`}
+                        onClick={(e) => handleDownvoteWishlist(item.wishlist_id, e)}
+                        disabled={votingLoading === item.wishlist_id}
+                      >
+                        <ArrowDown className={`w-4 h-4 ${userWishlistVotes.get(item.wishlist_id) === 'down' ? 'fill-current' : ''}`} />
                         <span className="ml-1">{item.downvotes || 0}</span>
+                        {votingLoading === item.wishlist_id && <Loader2 className="w-3 h-3 animate-spin ml-1" />}
                       </Button>
                     </div>
                     
@@ -1766,18 +1972,84 @@ export function Wishlist() {
       </div>
 
       {/* Details Modal */}
-      <WishlistDetailsModal
-        wishlist={selectedWishlist}
-        isOpen={isDetailsDialogOpen}
-        onClose={() => setIsDetailsDialogOpen(false)}
-        onEdit={handleEditFromModal}
-        onDelete={handleDeleteFromModal}
-        canEdit={selectedWishlist ? canEditWishlist(selectedWishlist) : false}
-        canDelete={selectedWishlist ? canDeleteWishlist(selectedWishlist) : false}
-        deleteLoading={selectedWishlist ? deleteLoading === selectedWishlist.wishlist_id : false}
-        onReport={handleReportWishlist}
-        onUserClick={handleUserClick}
-      />
+      {selectedWishlist && (
+        <PostModal
+          post={transformWishlistToPostModal(selectedWishlist)}
+          isOpen={isDetailsDialogOpen}
+          onClose={() => setIsDetailsDialogOpen(false)}
+          onUserClick={handleUserClick}
+          onReportClick={() => handleReportWishlist(selectedWishlist)}
+        />
+      )}
+
+      {/* Wishlist-specific actions overlay */}
+      {isDetailsDialogOpen && selectedWishlist && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-background border rounded-lg p-4 shadow-lg">
+          <div className="flex items-center gap-2">
+            {/* Max Price & Priority Info */}
+            <div className="flex items-center gap-4 text-sm mr-4">
+              <div className="flex items-center gap-1">
+                <DollarSign className="w-4 h-4 text-green-500" />
+                <span className="font-medium">{selectedWishlist.max_price}</span>
+              </div>
+              <Badge className={`text-xs ${getPriorityColor(selectedWishlist.priority)}`}>
+                {selectedWishlist.priority} priority
+              </Badge>
+              <Badge variant="outline" className="text-xs capitalize">
+                {selectedWishlist.category?.replace('-', ' ')}
+              </Badge>
+            </div>
+
+            {/* Action Buttons */}
+            {canEditWishlist(selectedWishlist) && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setIsDetailsDialogOpen(false);
+                  handleEditWishlist(selectedWishlist);
+                }}
+                className="text-blue-600 hover:text-blue-700"
+              >
+                <Edit className="w-4 h-4 mr-2" />
+                Edit
+              </Button>
+            )}
+
+            {canDeleteWishlist(selectedWishlist) && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setIsDetailsDialogOpen(false);
+                  handleDeleteWishlist(selectedWishlist.wishlist_id, selectedWishlist.item_name);
+                }}
+                disabled={deleteLoading === selectedWishlist.wishlist_id}
+                className="text-red-600 hover:text-red-700"
+              >
+                {deleteLoading === selectedWishlist.wishlist_id ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Trash2 className="w-4 h-4 mr-2" />
+                )}
+                {deleteLoading === selectedWishlist.wishlist_id ? 'Deleting...' : 'Delete'}
+              </Button>
+            )}
+
+            <Button
+              size="sm"
+              className="bg-blue-500 hover:bg-blue-600 text-white"
+              onClick={() => {
+                setIsDetailsDialogOpen(false);
+                handleUserClick(selectedWishlist.user_id);
+              }}
+            >
+              <MessageSquare className="w-4 h-4 mr-2" />
+              Make Offer
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Report Modal */}
       <ReportModal

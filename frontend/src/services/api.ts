@@ -1,9 +1,20 @@
-import { shouldThrottle } from '../lib/throttle';
-import { handleRateLimit, isRateLimited } from '../lib/rateLimitHandler';
+const API_BASE_URL = 'http://localhost:5000/api';
+import { shouldThrottle, queueRequest } from '../lib/throttle';
+import { handleRateLimit } from '../lib/rateLimitHandler';
+import { alertService } from './alertService';
 
-const API_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL;
+// Global loading manager - will be set by the context
+let globalLoadingManager: {
+  showLoader: (id: string, message?: string) => void;
+  hideLoader: (id: string) => void;
+} | null = null;
 
-const API_BASE_URL = `${API_URL}`;
+export const setGlobalLoadingManager = (manager: {
+  showLoader: (id: string, message?: string) => void;
+  hideLoader: (id: string) => void;
+}) => {
+  globalLoadingManager = manager;
+};
 
 class ApiService {
   private token: string | null;
@@ -32,7 +43,7 @@ class ApiService {
   }
 
   // Track pending requests to prevent duplicates
-  private pendingRequests = new Map<string, Promise<any>>();
+  private pendingRequests = new Map<string, Promise<unknown>>();
 
   // Determine request category based on endpoint
   private getRequestCategory(endpoint: string): 'auth' | 'standard' | 'heavy' {
@@ -88,86 +99,123 @@ class ApiService {
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
 
-    // Use the rate limit handler to handle retries and exponential backoff
-    const makeRequest = async () => {
+    // Generate unique request ID for global loading
+    const requestId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const loadingMessage = this.getLoadingMessage(endpoint, options.method);
+
+    // Show global loader
+    if (globalLoadingManager) {
+      globalLoadingManager.showLoader(requestId, loadingMessage);
+    }
+
+    // For heavy operations, use request queuing to prevent simultaneous execution
+    if (requestCategory === 'heavy') {
+      return queueRequest('heavy', async () => {
+        return await this.executeRequest(endpoint, config, url, requestId, requestKey || undefined);
+      });
+    }
+
+    // For standard and auth operations, execute normally
+    return this.executeRequest(endpoint, config, url, requestId, requestKey || undefined);
+  }
+
+  private async executeRequest(endpoint: string, config: RequestInit, url: string, requestId: string, requestKey?: string): Promise<unknown> {
+    const isGetRequest = config.method === 'GET' || !config.method;
+    
+    try {
+      // Make the actual HTTP request
       const response = await fetch(url, config);
-      const contentType = response.headers.get('content-type') || '';
-      const data = contentType.includes('application/json') ? await response.json() : { error: await response.text() };
 
+      // Handle rate limiting (429 errors)
+      if (response.status === 429) {
+        console.warn('Rate limit hit, attempting retry with backoff');
+        await handleRateLimit(endpoint, () => fetch(url, config), this.getRequestCategory(endpoint));
+        // Retry the request after backoff
+        return await fetch(url, config).then(async (retryResponse) => {
+          if (!retryResponse.ok) {
+            const errorData = await retryResponse.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP error! status: ${retryResponse.status}`);
+          }
+          return retryResponse.json();
+        });
+      }
+
+      // Handle other HTTP errors
       if (!response.ok) {
-        // Create enhanced error object to carry response data
-        const enhancedError: any = new Error(data?.error || 'API request failed');
-        enhancedError.status = response.status;
-        enhancedError.data = data;
-        enhancedError.headers = response.headers;
-        
-        if (response.status === 401) {
-          const errMsg = typeof data?.error === 'string' ? data.error : '';
-          const isAuthError =
-            errMsg === 'Access denied. No token provided.' ||
-            errMsg === 'Token expired' ||
-            errMsg === 'Invalid token' ||
-            errMsg === 'Token verification failed' ||
-            errMsg === 'User not found';
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
 
-          if (isAuthError) {
-            // Verify once to avoid false positives during navigation
-            const ok = currentToken ? await this.verifyTokenSilently(currentToken) : false;
-            if (!ok) {
-              this.clearToken();
-              window.dispatchEvent(new CustomEvent('auth-expired'));
-              throw new Error('Session expired. Please log in again.');
-            }
-            // Token is valid; treat as access error for this endpoint
-            throw new Error(data?.error || 'Access denied');
-          }
-        }
-        
-        if (response.status === 403) {
-          const errMsg = typeof data?.error === 'string' ? data.error : '';
-          if (errMsg === 'Account is banned' || errMsg === 'Account is deactivated') {
-            this.clearToken();
-            window.dispatchEvent(new CustomEvent('auth-expired'));
-          }
-          // Do NOT logout on 'Admin access required'
-        }
-        
-        throw enhancedError;
+      // Parse and return response
+      const data = await response.json();
+
+      // Handle deduplication for GET requests
+      if (isGetRequest && requestKey && this.pendingRequests.has(requestKey)) {
+        this.pendingRequests.delete(requestKey);
       }
 
       return data;
-    };
-
-    const executeRequest = async () => {
-      try {
-        // Use our rate limiting handler with exponential backoff for requests
-        return await handleRateLimit(endpoint, makeRequest, requestCategory);
-      } catch (error) {
-        console.error('API request error:', error);
-        throw error;
-      } finally {
-        // Clean up pending request reference
-        if (requestKey) {
-          this.pendingRequests.delete(requestKey);
-        }
+    } catch (error) {
+      // Handle deduplication cleanup on error
+      if (isGetRequest && requestKey && this.pendingRequests.has(requestKey)) {
+        this.pendingRequests.delete(requestKey);
       }
-    };
-    
-    const requestPromise = executeRequest();
-    
-    // Store the promise for GET requests to deduplicate
-    if (isGetRequest && requestKey) {
-      this.pendingRequests.set(requestKey, requestPromise);
-      
-      // Set a timeout to clean up the pending request
-      setTimeout(() => {
-        if (this.pendingRequests.get(requestKey) === requestPromise) {
-          this.pendingRequests.delete(requestKey);
-        }
-      }, 30000); // 30 second timeout
+      throw error;
+    } finally {
+      // Always hide the global loader
+      if (globalLoadingManager) {
+        globalLoadingManager.hideLoader(requestId);
+      }
     }
-    
-    return requestPromise;
+  }
+
+  private getLoadingMessage(endpoint: string, method?: string): string {
+    const methodStr = method || 'GET';
+
+    // Authentication
+    if (endpoint.includes('/auth/login')) return 'Signing you in...';
+    if (endpoint.includes('/auth/register')) return 'Creating your account...';
+    if (endpoint.includes('/auth/me')) return 'Loading your profile...';
+
+    // Trades
+    if (endpoint.includes('/trades') && methodStr === 'GET') return 'Loading trades...';
+    if (endpoint.includes('/trades') && methodStr === 'POST') return 'Creating trade...';
+    if (endpoint.includes('/trades') && methodStr === 'PATCH') return 'Updating trade...';
+    if (endpoint.includes('/trades') && methodStr === 'DELETE') return 'Deleting trade...';
+
+    // Forums
+    if (endpoint.includes('/forum') && methodStr === 'GET') return 'Loading forum posts...';
+    if (endpoint.includes('/forum') && methodStr === 'POST') return 'Posting to forum...';
+    if (endpoint.includes('/forum') && methodStr === 'PUT') return 'Updating post...';
+    if (endpoint.includes('/forum') && methodStr === 'DELETE') return 'Deleting post...';
+
+    // Events
+    if (endpoint.includes('/events') && methodStr === 'GET') return 'Loading events...';
+    if (endpoint.includes('/events') && methodStr === 'POST') return 'Creating event...';
+    if (endpoint.includes('/events') && methodStr === 'PUT') return 'Updating event...';
+    if (endpoint.includes('/events') && methodStr === 'DELETE') return 'Deleting event...';
+
+    // Wishlists
+    if (endpoint.includes('/wishlists') && methodStr === 'GET') return 'Loading wishlists...';
+    if (endpoint.includes('/wishlists') && methodStr === 'POST') return 'Adding to wishlist...';
+    if (endpoint.includes('/wishlists') && methodStr === 'PUT') return 'Updating wishlist...';
+    if (endpoint.includes('/wishlists') && methodStr === 'DELETE') return 'Removing from wishlist...';
+
+    // Admin operations
+    if (endpoint.includes('/admin')) return 'Loading admin data...';
+
+    // Reports
+    if (endpoint.includes('/reports') && methodStr === 'POST') return 'Submitting report...';
+    if (endpoint.includes('/reports') && methodStr === 'GET') return 'Loading reports...';
+
+    // Notifications
+    if (endpoint.includes('/notifications')) return 'Loading notifications...';
+
+    // Vouches
+    if (endpoint.includes('/vouches')) return 'Processing vouch...';
+
+    // Default
+    return 'Loading...';
   }
 
   // Auth methods
@@ -323,16 +371,41 @@ class ApiService {
   }
 
   async updateTrade(
-tradeId: string, tradeData: { itemOffered: string; itemRequested?: string; description?: string; }, editUploadSelectedImages: File[]  ) {
-    // Send JSON; backend updateTrade expects camelCase fields
-    return this.request(`/trades/${tradeId}`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        itemOffered: tradeData.itemOffered,
-        itemRequested: tradeData.itemRequested,
-        description: tradeData.description,
-      }),
-    });
+    tradeId: string,
+    tradeData: { itemOffered: string; itemRequested?: string; description?: string },
+    images?: File[]
+  ) {
+    if (images && images.length > 0) {
+      // Create FormData for image uploads
+      const formData = new FormData();
+      formData.append('itemOffered', tradeData.itemOffered);
+      if (tradeData.itemRequested) {
+        formData.append('itemRequested', tradeData.itemRequested);
+      }
+      if (tradeData.description) {
+        formData.append('description', tradeData.description);
+      }
+      
+      // Add images to FormData
+      images.forEach((image) => {
+        formData.append('images', image);
+      });
+      
+      return this.request(`/trades/${tradeId}`, {
+        method: 'PATCH',
+        body: formData,
+      });
+    } else {
+      // No images, use regular JSON request
+      return this.request(`/trades/${tradeId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          itemOffered: tradeData.itemOffered,
+          itemRequested: tradeData.itemRequested,
+          description: tradeData.description,
+        }),
+      });
+    }
   }
 
   async updateTradeStatus(tradeId: string, status: string) {
@@ -753,6 +826,16 @@ tradeId: string, tradeData: { itemOffered: string; itemRequested?: string; descr
     return this.request(`/users/${userId}`);
   }
 
+  async searchUsers(query: string, params?: { limit?: number }) {
+    const queryString = params ? new URLSearchParams(
+      Object.entries(params).reduce((acc, [key, value]) => {
+        if (value !== undefined) acc[key] = value.toString();
+        return acc;
+      }, {} as Record<string, string>)
+    ).toString() : '';
+    return this.request(`/users/search/${encodeURIComponent(query)}${queryString ? '?' + queryString : ''}`);
+  }
+
   async updateProfile(profileData: {
     username?: string;
     robloxUsername?: string;
@@ -780,11 +863,6 @@ tradeId: string, tradeData: { itemOffered: string; itemRequested?: string; descr
     });
   }
 
-  async searchUsers(query: string, limit?: number) {
-    const params = limit ? `?limit=${limit}` : '';
-    return this.request(`/users/search/${encodeURIComponent(query)}${params}`);
-  }
-
   async getUserWishlist(userId: string) {
     return this.request(`/users/${userId}/wishlist`);
   }
@@ -806,6 +884,9 @@ tradeId: string, tradeData: { itemOffered: string; itemRequested?: string; descr
   async getAdminStats() {
     return this.request('/admin/stats');
   }
+    async getAdminAnalytics(days: number = 7) {
+    return this.request(`/admin/analytics?days=${days}`);
+  }
 
   async getUsers(params: {
     page?: number;
@@ -826,21 +907,21 @@ tradeId: string, tradeData: { itemOffered: string; itemRequested?: string; descr
 
   async updateUserRole(userId: string, role: string) {
     return this.request(`/admin/users/${userId}/role`, {
-      method: 'PATCH',
+      method: 'PUT',
       body: JSON.stringify({ role })
     });
   }
 
   async banUser(userId: string, action: 'ban' | 'unban', reason?: string) {
     return this.request(`/admin/users/${userId}/ban`, {
-      method: 'PATCH',
+      method: 'POST',
       body: JSON.stringify({ action, reason })
     });
   }
 
   async updateUserStatus(userId: string, action: 'activate' | 'deactivate', reason?: string) {
     return this.request(`/admin/users/${userId}/status`, {
-      method: 'PATCH',
+      method: 'POST',
       body: JSON.stringify({ action, reason })
     });
   }
@@ -861,6 +942,19 @@ tradeId: string, tradeData: { itemOffered: string; itemRequested?: string; descr
     return this.request(`/verification/applications/${userId}/review`, {
       method: 'POST',
       body: JSON.stringify({ action: 'reject', reason })
+    });
+  }
+
+  async deleteMiddlemanApplication(applicationId: string) {
+    return this.request(`/verification/applications/${applicationId}`, {
+      method: 'DELETE'
+    });
+  }
+
+  async bulkDeleteMiddlemanApplications(applicationIds: string[]) {
+    return this.request('/verification/applications/bulk/delete', {
+      method: 'DELETE',
+      body: JSON.stringify({ applicationIds })
     });
   }
 
@@ -949,6 +1043,58 @@ tradeId: string, tradeData: { itemOffered: string; itemRequested?: string; descr
     }
   }
   
+  async uploadFaceImages(faceImages: File[]) {
+    try {
+      console.log('Uploading face images:', faceImages.length);
+      
+      const formData = new FormData();
+      
+      // Add face images
+      faceImages.forEach((image, index) => {
+        console.log(`Adding face image ${index + 1}: ${image.name} (${image.size} bytes)`);
+        formData.append('faceImages', image);
+      });
+      
+      // Direct fetch implementation for face uploads
+      const url = `${API_BASE_URL}/verification/upload-face`;
+      const token = this.token || localStorage.getItem('bloxmarket-token');
+      
+      console.log('Uploading face images to:', url);
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Face upload failed:', response.status, errorText);
+        let errorMessage = 'Failed to upload face images';
+        
+        try {
+          const errorData = JSON.parse(errorText);
+          if (errorData && errorData.error) {
+            errorMessage = errorData.error;
+          }
+        } catch {
+          if (errorText) {
+            errorMessage = errorText;
+          }
+        }
+        
+        throw new Error(errorMessage);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error in uploadFaceImages:', error);
+      throw error;
+    }
+  }
+  
   async getDocumentUrl(documentId: string) {
     return `${API_BASE_URL}/verification/documents/${documentId}`;
   }
@@ -980,6 +1126,282 @@ tradeId: string, tradeData: { itemOffered: string; itemRequested?: string; descr
 
   isAuthenticated(): boolean {
     return !!(this.token || localStorage.getItem('bloxmarket-token'));
+  }
+
+  // Handle user-facing errors with SweetAlert
+  private async handleUserError(error: unknown, showAlert: boolean = true): Promise<void> {
+    console.error('API Error:', error);
+
+    if (!showAlert) return;
+
+    let title = 'Error';
+    let message = 'An unexpected error occurred. Please try again.';
+
+    if (error instanceof Error) {
+      // Handle specific error types
+      if (error.message.includes('NetworkError') || error.message.includes('Failed to fetch')) {
+        title = 'Connection Error';
+        message = 'Unable to connect to the server. Please check your internet connection and try again.';
+      } else if (error.message.includes('401') || error.message.includes('Session expired')) {
+        title = 'Session Expired';
+        message = 'Your session has expired. Please log in again.';
+      } else if (error.message.includes('403') || error.message.includes('Access denied')) {
+        title = 'Access Denied';
+        message = 'You do not have permission to perform this action.';
+      } else if (error.message.includes('404')) {
+        title = 'Not Found';
+        message = 'The requested resource was not found.';
+      } else if (error.message.includes('500')) {
+        title = 'Server Error';
+        message = 'A server error occurred. Please try again later.';
+      } else if (error.message) {
+        message = error.message;
+      }
+    }
+
+    // Show SweetAlert error
+    await alertService.error(title, message);
+  }
+
+  // Handle success notifications
+  private async handleSuccess(message: string, showToast: boolean = true): Promise<void> {
+    if (showToast) {
+      alertService.toast(message, 'success');
+    }
+  }
+
+  // Enhanced request method with automatic error handling
+  async requestWithAlerts(endpoint: string, options: RequestInit = {}, showErrors: boolean = true): Promise<unknown> {
+    try {
+      return await this.request(endpoint, options);
+    } catch (error) {
+      await this.handleUserError(error, showErrors);
+      throw error; // Re-throw so calling code can handle if needed
+    }
+  }
+
+  // Enhanced login with success notification
+  async loginWithAlerts(credentials: { username: string; password: string }, rememberMe: boolean = true) {
+    try {
+      const result = await this.login(credentials, rememberMe);
+      await this.handleSuccess('Successfully logged in!');
+      return result;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced register with success notification
+  async registerWithAlerts(userData: {
+    username: string;
+    email: string;
+    password: string;
+    robloxUsername?: string;
+    messengerLink?: string;
+  }) {
+    try {
+      const result = await this.register(userData);
+      await this.handleSuccess('Account created successfully! Welcome to BloxMarket!');
+      return result;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced logout with notification
+  async logoutWithAlerts() {
+    try {
+      await this.logout();
+      await this.handleSuccess('Successfully logged out');
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced create trade with success notification
+  async createTradeWithAlerts(tradeData: {
+    itemOffered: string;
+    itemRequested?: string;
+    description?: string;
+  }, images?: File[]) {
+    try {
+      const result = await this.createTrade(tradeData, images);
+      await this.handleSuccess('Trade created successfully!');
+      return result;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced delete trade with confirmation and success notification
+  async deleteTradeWithAlerts(tradeId: string, tradeTitle?: string) {
+    const confirmed = await alertService.confirmDelete(
+      tradeTitle || 'this trade',
+      'trade'
+    );
+
+    if (!confirmed) return false;
+
+    try {
+      await this.deleteTrade(tradeId);
+      await this.handleSuccess('Trade deleted successfully');
+      return true;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced create forum post with success notification
+  async createForumPostWithAlerts(postData: {
+    title: string;
+    content: string;
+    category?: string;
+  }, images?: File[]) {
+    try {
+      const result = await this.createForumPost(postData, images);
+      await this.handleSuccess('Post created successfully!');
+      return result;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced delete forum post with confirmation
+  async deleteForumPostWithAlerts(postId: string, postTitle?: string) {
+    const confirmed = await alertService.confirmDelete(
+      postTitle || 'this post',
+      'forum post'
+    );
+
+    if (!confirmed) return false;
+
+    try {
+      await this.deleteForumPost(postId);
+      await this.handleSuccess('Post deleted successfully');
+      return true;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced create event with success notification
+  async createEventWithAlerts(eventData: {
+    title: string;
+    description: string;
+    type: 'giveaway' | 'competition' | 'event';
+    startDate: string;
+    endDate: string;
+    prizes?: string[];
+    requirements?: string[];
+    maxParticipants?: number;
+  }, images?: File[]) {
+    try {
+      const result = await this.createEvent(eventData, images);
+      await this.handleSuccess('Event created successfully!');
+      return result;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced delete event with confirmation
+  async deleteEventWithAlerts(eventId: string, eventTitle?: string) {
+    const confirmed = await alertService.confirmDelete(
+      eventTitle || 'this event',
+      'event'
+    );
+
+    if (!confirmed) return false;
+
+    try {
+      await this.deleteEvent(eventId);
+      await this.handleSuccess('Event deleted successfully');
+      return true;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced create wishlist with success notification
+  async createWishlistWithAlerts(data: {
+    item_name: string;
+    description: string;
+    max_price: string;
+    category: string;
+    priority: 'high' | 'medium' | 'low';
+  }, images?: File[]) {
+    try {
+      const result = await this.createWishlistWithImages(data, images);
+      await this.handleSuccess('Item added to wishlist!');
+      return result;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced delete wishlist with confirmation
+  async deleteWishlistWithAlerts(wishlistId: string, itemName?: string) {
+    const confirmed = await alertService.confirmDelete(
+      itemName || 'this wishlist item',
+      'wishlist item'
+    );
+
+    if (!confirmed) return false;
+
+    try {
+      await this.deleteWishlist(wishlistId);
+      await this.handleSuccess('Item removed from wishlist');
+      return true;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced report creation with success notification
+  async createReportWithAlerts(reportData: {
+    post_id: string;
+    post_type: 'trade' | 'forum' | 'event' | 'wishlist' | 'user';
+    reason: string;
+    type?: 'Scamming' | 'Harassment' | 'Inappropriate Content' | 'Spam' | 'Impersonation' | 'Other';
+  }) {
+    try {
+      const result = await this.createReport(reportData);
+      await this.handleSuccess('Report submitted successfully');
+      return result;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
+  }
+
+  // Enhanced middleman application with success notification
+  async applyForMiddlemanWithAlerts(applicationData: {
+    experience: string;
+    availability: string;
+    why_middleman: string;
+    referral_codes?: string;
+    external_links?: string;
+    preferred_trade_types?: string;
+  }, documents?: File[]) {
+    try {
+      const result = await this.applyForMiddleman(applicationData, documents);
+      await this.handleSuccess('Application submitted successfully! You will be notified once reviewed.');
+      return result;
+    } catch (error) {
+      await this.handleUserError(error);
+      throw error;
+    }
   }
 
   // Get trade comments
@@ -1694,7 +2116,7 @@ tradeId: string, tradeData: { itemOffered: string; itemRequested?: string; descr
   // Report methods
   async createReport(reportData: {
     post_id: string;
-    post_type: 'trade' | 'forum' | 'event' | 'wishlist';
+    post_type: 'trade' | 'forum' | 'event' | 'wishlist' | 'user';
     reason: string;
     type?: 'Scamming' | 'Harassment' | 'Inappropriate Content' | 'Spam' | 'Impersonation' | 'Other';
   }) {
@@ -1930,6 +2352,249 @@ tradeId: string, tradeData: { itemOffered: string; itemRequested?: string; descr
   async deleteNotification(notificationId: string) {
     return this.request(`/notifications/${notificationId}`, {
       method: 'DELETE'
+    });
+  }
+
+  // Middleman Verification DataTable methods
+  async getMiddlemanVerificationDataTable(params?: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: string;
+  }) {
+    const queryParams = new URLSearchParams();
+
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== '') {
+          queryParams.append(key, String(value));
+        }
+      });
+    }
+
+    const response = await this.request(`/admin/datatables/verification?${queryParams.toString()}`);
+    return response;
+  }
+
+  async approveMiddlemanApplication(applicationId: string) {
+    return await this.request(`/admin/datatables/verification/${applicationId}/approve`, {
+      method: 'PUT'
+    });
+  }
+
+  async rejectMiddlemanApplication(applicationId: string, reason: string) {
+    return await this.request(`/admin/datatables/verification/${applicationId}/reject`, {
+      method: 'PUT',
+      body: JSON.stringify({ reason })
+    });
+  }
+
+  async getMiddlemanApplicationDetails(applicationId: string) {
+    const response = await this.request(`/admin/datatables/verification/${applicationId}`);
+    return response.application;
+  }
+
+  async bulkUpdateMiddlemanApplications(applicationIds: string[], action: 'approve' | 'reject', reason?: string) {
+    return await this.request('/admin/datatables/verification/bulk', {
+      method: 'POST',
+      body: JSON.stringify({ applicationIds, action, reason })
+    });
+  }
+
+  async exportMiddlemanVerificationCSV(status?: string) {
+    const queryParams = new URLSearchParams();
+    if (status) queryParams.append('status', status);
+
+    const queryString = queryParams.toString();
+    const token = localStorage.getItem('bloxmarket-token');
+
+    const response = await fetch(
+      `${API_BASE_URL}/admin/datatables/verification/export${queryString ? '?' + queryString : ''}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error('Failed to export middleman verification data');
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `middleman-verification-${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  }
+
+  // Penalty methods
+  async issuePenalty(penaltyData: {
+    userId: string;
+    type: 'warning' | 'restriction' | 'suspension' | 'strike';
+    severity: 'low' | 'medium' | 'high' | 'critical';
+    reason: string;
+    duration?: number;
+  }) {
+    return this.request('/admin/users/penalty', {
+      method: 'POST',
+      body: JSON.stringify(penaltyData)
+    });
+  }
+
+  async liftPenalty(userId: string, penaltyId: string) {
+    return this.request(`/admin/users/${userId}/penalty/${penaltyId}`, {
+      method: 'DELETE'
+    });
+  }
+
+  // Messenger methods
+  async getUserChats(params?: { page?: number; limit?: number }) {
+    const queryString = params ? new URLSearchParams(
+      Object.entries(params).reduce((acc, [key, value]) => {
+        if (value !== undefined) acc[key] = value.toString();
+        return acc;
+      }, {} as Record<string, string>)
+    ).toString() : '';
+    return this.request(`/chats?${queryString}`);
+  }
+
+  async getChat(chatId: string) {
+    return this.request(`/chats/${chatId}`);
+  }
+
+  async createDirectChat(otherUserId: string) {
+    return this.request('/chats/direct', {
+      method: 'POST',
+      body: JSON.stringify({ otherUserId })
+    });
+  }
+
+  async createGroupChat(data: {
+    name: string;
+    description?: string;
+    participantIds: string[];
+  }) {
+    return this.request('/chats/group', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  }
+
+  async updateGroupChat(chatId: string, data: {
+    name?: string;
+    description?: string;
+    avatar_url?: string;
+  }) {
+    return this.request(`/chats/${chatId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+  }
+
+  async clearConversation(chatId: string) {
+    return this.request(`/chats/${chatId}/clear`, {
+      method: 'PUT'
+    });
+  }
+
+  async deleteChat(chatId: string) {
+    return this.request(`/chats/${chatId}`, {
+      method: 'DELETE'
+    });
+  }
+
+  async addParticipant(chatId: string, newParticipantId: string) {
+    return this.request(`/chats/${chatId}/participants`, {
+      method: 'POST',
+      body: JSON.stringify({ newParticipantId })
+    });
+  }
+
+  async removeParticipant(chatId: string, participantId: string) {
+    return this.request(`/chats/${chatId}/participants`, {
+      method: 'DELETE',
+      body: JSON.stringify({ participantId })
+    });
+  }
+
+  async leaveGroupChat(chatId: string) {
+    return this.request(`/chats/${chatId}/leave`, {
+      method: 'POST'
+    });
+  }
+
+  async updateParticipantRole(chatId: string, participantId: string, role: 'member' | 'admin') {
+    return this.request(`/chats/${chatId}/participants/role`, {
+      method: 'PUT',
+      body: JSON.stringify({ participantId, role })
+    });
+  }
+
+  async getMessages(chatId: string, params?: { page?: number; limit?: number }) {
+    const queryString = params ? new URLSearchParams(
+      Object.entries(params).reduce((acc, [key, value]) => {
+        if (value !== undefined) acc[key] = value.toString();
+        return acc;
+      }, {} as Record<string, string>)
+    ).toString() : '';
+    return this.request(`/messages/chats/${chatId}/messages?${queryString}`);
+  }
+
+  async sendMessage(chatId: string, content: string, messageType: 'text' | 'image' | 'file' = 'text', replyTo?: string, fileUrl?: string, fileName?: string, fileSize?: number) {
+    return this.request(`/messages/chats/${chatId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({
+        content,
+        message_type: messageType,
+        reply_to: replyTo,
+        file_url: fileUrl,
+        file_name: fileName,
+        file_size: fileSize
+      })
+    });
+  }
+
+  async editMessage(messageId: string, content: string) {
+    return this.request(`/messages/${messageId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content })
+    });
+  }
+
+  async deleteMessage(messageId: string) {
+    return this.request(`/messages/${messageId}`, {
+      method: 'DELETE'
+    });
+  }
+
+  async addReaction(messageId: string, emoji: string) {
+    return this.request(`/messages/${messageId}/reactions`, {
+      method: 'POST',
+      body: JSON.stringify({ emoji })
+    });
+  }
+
+  async removeReaction(messageId: string, emoji: string) {
+    return this.request(`/messages/${messageId}/reactions`, {
+      method: 'DELETE',
+      body: JSON.stringify({ emoji })
+    });
+  }
+
+  async uploadChatImage(chatId: string, imageFile: File) {
+    const formData = new FormData();
+    formData.append('image', imageFile);
+
+    return this.request(`/messages/chats/${chatId}/upload-image`, {
+      method: 'POST',
+      body: formData,
     });
   }
 }

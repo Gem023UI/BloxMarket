@@ -1,7 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, Component } from 'react';
+import { PostModal } from './components/ui/post-modal';
+import type { PostModalPost } from './components/ui/post-modal';
 import type { ErrorInfo, ReactNode } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { AuthPage } from './components/AuthPage';
+import { LandingPage } from './components/LandingPage';
 import { Dashboard } from './components/Dashboard';
 import { TradingHub } from './components/TradingHub';
 import { Wishlist } from './components/Wishlist';
@@ -11,13 +14,19 @@ import { NewUserProfile } from './components/NewUserProfile';
 import { ProfileView } from './components/ProfileView';
 import { AdminPanel } from './components/AdminPanel';
 import { EventsGiveaways } from './components/EventsGiveaways';
-import { apiService } from './services/api';
+import { apiService, setGlobalLoadingManager } from './services/api';
 import { MyForumPosts } from './components/user/MyForumPosts';
 import { MyTradePosts } from './components/user/MyTradePosts';
 import { MyWishlist } from './components/user/MyWishlist';
 import { NotificationsPage } from './components/NotificationsPage';
+import { Messenger } from './components/Messenger';
 import { Toaster } from './components/Toaster';
 import { RateLimitListener } from './components/RateLimitListener';
+import { GlobalLoadingProvider } from './contexts/GlobalLoadingContext';
+import GlobalLoader from './components/GlobalLoader';
+import GlobalLoadingSetup from './components/GlobalLoadingSetup';
+import { Footer } from './components/ui/footer';
+import { Header } from './components/ui/header';
 
 // Error Boundary Component
 interface ErrorBoundaryProps {
@@ -46,7 +55,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="min-h-screen flex items-center justify-center bg-slate-900">
           <div className="text-center p-8">
             <div className="text-red-500 mb-4">
               <svg className="w-16 h-16 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -96,15 +105,17 @@ interface User {
 const AuthContext = createContext<{
   user: User | null;
   login: (userData: User, rememberMe?: boolean) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
   isLoggedIn: boolean;
   isLoading: boolean;
+  isLoggingOut: boolean;
 }>({
   user: null,
   login: () => {},
-  logout: () => {},
+  logout: async () => {},
   isLoggedIn: false,
-  isLoading: true
+  isLoading: true,
+  isLoggingOut: false
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -121,11 +132,16 @@ const AppContext = createContext<{
 export const useApp = () => useContext(AppContext);
 
 export default function App() {
-  const [isDark, setIsDark] = useState(false);
-  const [currentPage, setCurrentPage] = useState('dashboard');
+  // Load theme preference from localStorage, default to false (light mode)
+  const [isDark, setIsDark] = useState(() => {
+    const savedTheme = localStorage.getItem('bloxmarket-theme');
+    return savedTheme === 'dark';
+  });
+  const [currentPage, setCurrentPage] = useState('landing');
   const [user, setUser] = useState<User | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   // State for rate limit notifications
   const [rateLimitNotification, setRateLimitNotification] = useState<{
@@ -139,56 +155,69 @@ export default function App() {
   });
 
   useEffect(() => {
+    let isAuthInitializing = false;
+
     const initAuth = async () => {
-      // Check both storage types for tokens and user data
-      const localToken = localStorage.getItem('bloxmarket-token');
-      const sessionToken = sessionStorage.getItem('bloxmarket-token');
-      const token = localToken || sessionToken;
+      // Prevent multiple concurrent auth initializations
+      if (isAuthInitializing) {
+        console.log('Auth initialization already in progress, skipping...');
+        return;
+      }
       
-      const localUser = localStorage.getItem('bloxmarket-user');
-      const sessionUser = sessionStorage.getItem('bloxmarket-user');
-      const storedUser = localUser || sessionUser;
-      
-      // Determine which storage to use for later operations
-      const isPersistentLogin = !!localToken;
+      isAuthInitializing = true;
 
-      if (token) {
-        // Set token using the appropriate storage type
+      try {
+        // Check both storage types for tokens and user data
+        const localToken = localStorage.getItem('bloxmarket-token');
+        const sessionToken = sessionStorage.getItem('bloxmarket-token');
+        const token = localToken || sessionToken;
+        
+        const localUser = localStorage.getItem('bloxmarket-user');
+        const sessionUser = sessionStorage.getItem('bloxmarket-user');
+        const storedUser = localUser || sessionUser;
+        
+        // Determine which storage to use for later operations
         const isPersistentLogin = !!localToken;
-        apiService.setToken(token, isPersistentLogin);
 
-        if (storedUser) {
-          try {
-            const u = JSON.parse(storedUser);
-            setUser(u);
-            setIsLoggedIn(true);
-          } catch {
-            // Clear from the appropriate storage
-            if (isPersistentLogin) {
-              localStorage.removeItem('bloxmarket-user');
-            } else {
-              sessionStorage.removeItem('bloxmarket-user');
+        if (token) {
+          // Set token using the appropriate storage type
+          apiService.setToken(token, isPersistentLogin);
+
+          if (storedUser) {
+            try {
+              const u = JSON.parse(storedUser);
+              setUser(u);
+              setIsLoggedIn(true);
+            } catch {
+              // Clear from the appropriate storage
+              if (isPersistentLogin) {
+                localStorage.removeItem('bloxmarket-user');
+              } else {
+                sessionStorage.removeItem('bloxmarket-user');
+              }
             }
           }
-        }
 
-        try {
-          const me = await apiService.getCurrentUser();
-          setUser(me);
-          setIsLoggedIn(true);
-          
-          // Save to the appropriate storage
-          const storage = isPersistentLogin ? localStorage : sessionStorage;
-          storage.setItem('bloxmarket-user', JSON.stringify(me));
-        } catch (err) {
-          // Keep UI; actual auth errors will dispatch 'auth-expired'
-          console.warn('Token verify failed:', err);
+          try {
+            const me = await apiService.getCurrentUser() as User;
+            setUser(me);
+            setIsLoggedIn(true);
+            setCurrentPage('landing');
+            
+            // Save to the appropriate storage
+            const storage = isPersistentLogin ? localStorage : sessionStorage;
+            storage.setItem('bloxmarket-user', JSON.stringify(me));
+          } catch (err) {
+            // Keep UI; actual auth errors will dispatch 'auth-expired'
+            console.warn('Token verify failed:', err);
+          }
+        } else {
+          setCurrentPage('landing');
         }
-      } else {
-        setCurrentPage('auth');
+      } finally {
+        setIsLoading(false);
+        isAuthInitializing = false;
       }
-
-      setIsLoading(false);
     };
 
     const onExpired = () => handleLogout();
@@ -222,11 +251,20 @@ export default function App() {
     };
   }, []);
 
+  // Apply theme class to document element when theme changes
+  useEffect(() => {
+    if (isDark) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDark]);
+
   const handleLogout = () => {
     console.log('Logging out user');
     setUser(null);
     setIsLoggedIn(false);
-    setCurrentPage('auth');
+    setCurrentPage('landing');
     
     // Clear all tokens and user data from both storage types
     localStorage.removeItem('bloxmarket-token');
@@ -242,21 +280,16 @@ export default function App() {
   };
 
   const toggleTheme = () => {
-    setIsDark(!isDark);
-    if (!isDark) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('bloxmarket-theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('bloxmarket-theme', 'light');
-    }
+    const newIsDark = !isDark;
+    setIsDark(newIsDark);
+    localStorage.setItem('bloxmarket-theme', newIsDark ? 'dark' : 'light');
   };
 
   const login = (userData: User, rememberMe: boolean = true) => {
     console.log('User logged in:', userData.username);
     setUser(userData);
     setIsLoggedIn(true);
-    setCurrentPage('dashboard');
+    setCurrentPage('landing');
     
     // Store user data in the appropriate storage based on remember me preference
     const storage = rememberMe ? localStorage : sessionStorage;
@@ -267,8 +300,14 @@ export default function App() {
     otherStorage.removeItem('bloxmarket-user');
   };
 
-  const logout = () => {
+  const logout = async () => {
+    setIsLoggingOut(true);
+    
+    // Add a small delay to show the loading state
+    await new Promise(resolve => setTimeout(resolve, 800));
+    
     handleLogout();
+    setIsLoggingOut(false);
   };
 
   const renderCurrentPage = () => {
@@ -304,10 +343,16 @@ export default function App() {
         return <MyWishlist />;
       case 'notifications':
         return <NotificationsPage />;
+      case 'messenger':
+        return <Messenger />;
       default:
         // Handle profile pages with user ID (format: profile-{userId})
         if (currentPage.startsWith('profile-')) {
           return <ProfileView />;
+        }
+        // Handle messages pages with user ID (format: messages-{userId})
+        if (currentPage.startsWith('messages-')) {
+          return <Messenger />;
         }
         return <Dashboard />;
     }
@@ -316,7 +361,7 @@ export default function App() {
   // Show loading screen while checking authentication
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-screen flex items-center justify-center bg-slate-900">
         <div className="text-center">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mb-4 shadow-lg animate-pulse">
             <span className="text-white font-bold text-2xl">BM</span>
@@ -329,64 +374,82 @@ export default function App() {
 
   if (!isLoggedIn) {
     return (
-      <ThemeContext.Provider value={{ isDark, toggleTheme }}>
-        <AuthContext.Provider value={{ user, login, logout, isLoggedIn, isLoading }}>
-          <div className="min-h-screen bg-background text-foreground">
-            <AuthPage />
-          </div>
-        </AuthContext.Provider>
-      </ThemeContext.Provider>
+      <GlobalLoadingProvider>
+        <ThemeContext.Provider value={{ isDark, toggleTheme }}>
+          <AuthContext.Provider value={{ user, login, logout, isLoggedIn, isLoading, isLoggingOut }}>
+            <AppContext.Provider value={{ currentPage, setCurrentPage }}>
+              <div className="min-h-screen bg-slate-900 text-foreground flex flex-col">
+                <Header />
+                <main className="flex-1">
+                  {currentPage === 'auth' ? <AuthPage /> : <LandingPage />}
+                </main>
+                <Footer />
+              </div>
+              <GlobalLoader />
+              <GlobalLoadingSetup />
+            </AppContext.Provider>
+          </AuthContext.Provider>
+        </ThemeContext.Provider>
+      </GlobalLoadingProvider>
     );
   }
 
   return (
-    <ThemeContext.Provider value={{ isDark, toggleTheme }}>
-      <AuthContext.Provider value={{ user, login, logout, isLoggedIn, isLoading }}>
-        <AppContext.Provider value={{ currentPage, setCurrentPage }}>
-          <div className="min-h-screen bg-background text-foreground flex">
-            <Sidebar />
-            <main className="flex-1 overflow-hidden">
-              <ErrorBoundary>
-                {renderCurrentPage()}
-              </ErrorBoundary>
-            </main>
-            
-            {/* Enhanced Toast notifications */}
-            <Toaster />
-            <RateLimitListener />
-            
-            {/* Legacy Rate Limit Error Notification */}
-            {rateLimitNotification.visible && (
-              <div className="fixed bottom-4 right-4 z-50 bg-red-500 text-white p-4 rounded-lg shadow-lg max-w-md">
-                <div className="flex items-start">
-                  <div className="flex-shrink-0">
-                    <svg className="h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                    </svg>
-                  </div>
-                  <div className="ml-3">
-                    <p className="text-sm font-medium">{rateLimitNotification.message}</p>
-                  </div>
-                  <div className="ml-auto pl-3">
-                    <div className="-mx-1.5 -my-1.5">
-                      <button
-                        type="button"
-                        className="inline-flex rounded-md p-1.5 text-white hover:bg-red-600 focus:outline-none"
-                        onClick={() => setRateLimitNotification(prev => ({ ...prev, visible: false }))}
-                      >
-                        <span className="sr-only">Dismiss</span>
-                        <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                        </svg>
-                      </button>
+    <GlobalLoadingProvider>
+      <ThemeContext.Provider value={{ isDark, toggleTheme }}>
+        <AuthContext.Provider value={{ user, login, logout, isLoggedIn, isLoading, isLoggingOut }}>
+          <AppContext.Provider value={{ currentPage, setCurrentPage }}>
+            <div className="min-h-screen bg-slate-900 text-foreground flex flex-col">
+              <Header />
+              <div className="flex flex-1 overflow-hidden">
+                <Sidebar />
+                <main className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-slate-600 scrollbar-track-slate-800 hover:scrollbar-thumb-slate-500" style={{ marginLeft: 'px', marginTop: '64px' }}>
+                  <ErrorBoundary>
+                    {renderCurrentPage()}
+                  </ErrorBoundary>
+                </main>
+              </div>
+              <Footer />
+
+              {/* Enhanced Toast notifications */}
+              <Toaster />
+              <RateLimitListener />
+              <GlobalLoader />
+              <GlobalLoadingSetup />
+
+              {/* Legacy Rate Limit Error Notification */}
+              {rateLimitNotification.visible && (
+                <div className="fixed bottom-4 right-4 z-50 bg-red-500 text-white p-4 rounded-lg shadow-lg max-w-md">
+                  <div className="flex items-start">
+                    <div className="flex-shrink-0">
+                      <svg className="h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div className="ml-3">
+                      <p className="text-sm font-medium">{rateLimitNotification.message}</p>
+                    </div>
+                    <div className="ml-auto pl-3">
+                      <div className="-mx-1.5 -my-1.5">
+                        <button
+                          type="button"
+                          className="inline-flex rounded-md p-1.5 text-white hover:bg-red-600 focus:outline-none"
+                          onClick={() => setRateLimitNotification(prev => ({ ...prev, visible: false }))}
+                        >
+                          <span className="sr-only">Dismiss</span>
+                          <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
-        </AppContext.Provider>
-      </AuthContext.Provider>
-    </ThemeContext.Provider>
+              )}
+            </div>
+          </AppContext.Provider>
+        </AuthContext.Provider>
+      </ThemeContext.Provider>
+    </GlobalLoadingProvider>
   );
 }

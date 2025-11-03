@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog';
 import { Alert, AlertDescription } from '../ui/alert';
 import { apiService } from '../../services/api';
+import { alertService } from '../../services/alertService';
 import { toast } from 'sonner';
 import { 
   ShoppingCart, 
@@ -86,7 +87,7 @@ export function MyTradePosts() {
   ];
 
   const statuses = [
-    { value: 'expired', label: 'Expired', color: 'bg-gray-100 text-gray-800' }
+    { value: 'expired', label: 'Expired', color: 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300' }
   ];
 
   const loadMyTrades = useCallback(async () => {
@@ -372,7 +373,14 @@ export function MyTradePosts() {
   };
 
   const handleDeletePost = async (tradeId: string) => {
-    if (!confirm('Are you sure you want to delete this trade post? This action cannot be undone.')) {
+    const confirmed = await alertService.confirm(
+      'Delete Trade Post',
+      'Are you sure you want to delete this trade post? This action cannot be undone.',
+      'Delete',
+      'Cancel'
+    );
+    
+    if (!confirmed) {
       return;
     }
     
@@ -662,7 +670,7 @@ export function MyTradePosts() {
                           {post.item_requested && ` for ${post.item_requested}`}
                         </h3>
                         <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-                          <Badge className={`text-xs ${statuses.find(s => s.value === post.status)?.color || 'bg-gray-100 text-gray-800'}`}>
+                          <Badge className={`text-xs ${statuses.find(s => s.value === post.status)?.color || 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300'}`}>
                             {getStatusIcon()}
                             <span className="ml-1">{statuses.find(s => s.value === post.status)?.label || post.status}</span>
                           </Badge>
@@ -948,4 +956,3 @@ export function MyTradePosts() {
     </div>
   );
 }
-

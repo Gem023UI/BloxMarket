@@ -11,7 +11,6 @@ import {
   Star, 
   MessageSquare, 
   CheckCircle,
-  TrendingUp,
   Award,
   Heart,
   Loader2
@@ -20,6 +19,24 @@ import { apiService } from '../services/api';
 import { toast } from 'sonner';
 import { MiddlemanApplicationForm } from './user/MiddlemanApplicationForm';
 import { useAuth, useApp } from '../App';
+
+// Helper function to get avatar URL
+const getAvatarUrl = (avatarUrl?: string) => {
+  if (!avatarUrl) return '';
+
+  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
+    return avatarUrl;
+  }
+
+  if (avatarUrl.startsWith('/uploads/') || avatarUrl.startsWith('/api/uploads/')) {
+    return `http://localhost:5000${avatarUrl}`;
+  }
+
+  console.log('getAvatarUrl: Processing filename:', avatarUrl);
+  const fullUrl = `http://localhost:5000/api/uploads/avatars/${avatarUrl}`;
+  console.log('getAvatarUrl: Generated URL:', fullUrl);
+  return fullUrl;
+};
 
 // Define the Middleman interface
 interface Middleman {
@@ -341,8 +358,6 @@ export function MiddlemanDirectory() {
         return b.rating - a.rating || b.vouchCount - a.vouchCount;
       case 'vouches':
         return b.vouchCount - a.vouchCount;
-      case 'trades':
-        return b.completedTrades - a.completedTrades;
       case 'newest':
         return new Date(b.joinDate).getTime() - new Date(a.joinDate).getTime();
       default:
@@ -383,7 +398,7 @@ export function MiddlemanDirectory() {
               placeholder="Search middlemen by name or specialty..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="max-w-sm"
+              className="max-w-md"
             />
           </div>
           
@@ -394,7 +409,6 @@ export function MiddlemanDirectory() {
             <SelectContent>
               <SelectItem value="rating">Highest Rated</SelectItem>
               <SelectItem value="vouches">Most Vouches</SelectItem>
-              <SelectItem value="trades">Most Trades</SelectItem>
               <SelectItem value="newest">Newest</SelectItem>
             </SelectContent>
           </Select>
@@ -407,14 +421,6 @@ export function MiddlemanDirectory() {
           <div className="flex items-center gap-2">
             <Shield className="w-4 h-4 text-green-500" />
             <span>{sortedMiddlemen.length} Verified Middlemen</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-blue-500" />
-            <span>99.2% Success Rate</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-purple-500" />
-            <span>45,678 Completed Trades</span>
           </div>
         </div>
       </div>
@@ -444,14 +450,28 @@ export function MiddlemanDirectory() {
                   
                   <CardHeader className="pb-4">
                     <div className="flex items-start gap-4">
-                      <Avatar className="w-16 h-16">
-                        <AvatarImage src={mm.avatar} />
+                      <Avatar 
+                        className="w-16 h-16 cursor-pointer hover:opacity-80 transition-opacity"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleMiddlemanClick(mm.id.toString());
+                        }}
+                      >
+                        <AvatarImage src={getAvatarUrl(mm.avatar)} />
                         <AvatarFallback>{mm.username[0]}</AvatarFallback>
                       </Avatar>
                       
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
-                          <h3 className="font-semibold text-lg">{mm.username}</h3>
+                          <h3 
+                            className="font-semibold text-lg cursor-pointer hover:text-blue-600 transition-colors"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleMiddlemanClick(mm.id.toString());
+                            }}
+                          >
+                            {mm.username}
+                          </h3>
                           {mm.verified && (
                             <CheckCircle className="w-5 h-5 text-blue-500" />
                           )}
@@ -495,14 +515,6 @@ export function MiddlemanDirectory() {
                     
                     {/* Stats Grid */}
                     <div className="grid grid-cols-2 gap-4 p-3 bg-muted/30 rounded-lg">
-                      <div>
-                        <span className="text-xs text-muted-foreground">Completed Trades</span>
-                        <p className="font-semibold text-green-600 dark:text-green-400">{mm.completedTrades.toLocaleString()}</p>
-                      </div>
-                      <div>
-                        <span className="text-xs text-muted-foreground">Success Rate</span>
-                        <p className="font-semibold text-blue-600 dark:text-blue-400">{mm.successRate}%</p>
-                      </div>
                       <div>
                         <span className="text-xs text-muted-foreground">Response Time</span>
                         <p className="font-semibold">{mm.responseTime}</p>

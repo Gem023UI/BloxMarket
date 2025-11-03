@@ -21,30 +21,60 @@ import {
   X,
   Loader2,
   AlertCircle,
-  CheckCircle
+  CheckCircle,
+  Shield,
+  Award,
+  Users
 } from 'lucide-react';
 
 interface ProfileData {
-  _id: string;
-  username: string;
-  email: string;
-  roblox_username?: string;
-  bio?: string;
-  discord_username?: string;
-  messenger_link?: string;
-  website?: string;
-  avatar_url?: string;
-  role: string;
-  createdAt: string;
-  vouch_count: number;
-  totalVouches: number;
-  wishlistItems: Array<{
-    wishlist_id: string;
-    item_name: string;
-    item_value?: string;
-    description?: string;
-    image_url?: string;
-  }>;
+  user: {
+    _id: string;
+    username: string;
+    roblox_username?: string;
+    bio?: string;
+    discord_username?: string;
+    messenger_link?: string;
+    website?: string;
+    avatar_url?: string;
+    role: string;
+    credibility_score: number;
+    vouch_count: number;
+    is_verified?: boolean;
+    is_middleman?: boolean;
+    createdAt: string;
+    last_active?: string;
+    location?: string;
+    timezone?: string;
+  };
+  stats: {
+    totalTrades: number;
+    completedTrades: number;
+    totalVouches: number;
+    successRate: number;
+  };
+  vouches?: {
+    id: string;
+    rating: number;
+    comment?: string;
+    given_by: {
+      id: string;
+      username: string;
+      avatar_url?: string;
+    };
+    created_at: string;
+  }[];
+  middlemanVouches?: {
+    id: string;
+    rating: number;
+    comment?: string;
+    given_by: {
+      id: string;
+      username: string;
+      avatar_url?: string;
+    };
+    created_at: string;
+  }[];
 }
 
 interface EditFormData {
@@ -88,17 +118,23 @@ export function NewUserProfile() {
         setLoading(true);
         setError('');
 
-        const data = await apiService.getCurrentUser();
+        // Use getUserProfile instead of getCurrentUser to get the nested structure
+        const userId = user?._id || user?.id;
+        if (!userId || typeof userId !== 'string') {
+          throw new Error('User ID not found');
+        }
+
+        const data = await apiService.getUserProfile(userId) as ProfileData;
         setProfileData(data);
 
         // Initialize edit form with current data
         setEditForm({
-          username: data.username || '',
-          bio: data.bio || '',
-          discordUsername: data.discord_username || '',
-          messengerLink: data.messenger_link || '',
-          website: data.website || '',
-          robloxUsername: data.roblox_username || '',
+          username: data.user.username || '',
+          bio: data.user.bio || '',
+          discordUsername: data.user.discord_username || '',
+          messengerLink: data.user.messenger_link || '',
+          website: data.user.website || '',
+          robloxUsername: data.user.roblox_username || '',
           currentPassword: '',
           newPassword: '',
           confirmPassword: ''
@@ -111,8 +147,10 @@ export function NewUserProfile() {
       }
     };
 
-    loadProfile();
-  }, []);
+    if (user) {
+      loadProfile();
+    }
+  }, [user]);
 
   const handleAvatarSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -144,12 +182,15 @@ export function NewUserProfile() {
       setSaving(true);
       const toastId = toast.loading('Uploading avatar...');
 
-      const result = await apiService.uploadAvatar(selectedAvatar);
+      const result = await apiService.uploadAvatar(selectedAvatar) as { avatar_url: string };
 
       // Update profile data with new avatar
       setProfileData(prev => prev ? ({
         ...prev,
-        avatar_url: result.avatar_url
+        user: {
+          ...prev.user,
+          avatar_url: result.avatar_url
+        }
       }) : null);
 
       setSelectedAvatar(null);
@@ -223,19 +264,25 @@ export function NewUserProfile() {
 
       // Refetch profile data to ensure we have the latest data
       try {
-        const updatedData = await apiService.getCurrentUser();
-        setProfileData(updatedData);
+        const userId = user?._id || user?.id;
+        if (userId && typeof userId === 'string') {
+          const updatedData = await apiService.getUserProfile(userId) as ProfileData;
+          setProfileData(updatedData);
+        }
       } catch (refetchError) {
         console.error('Failed to refetch profile data:', refetchError);
         // Fallback to optimistic update if refetch fails
         setProfileData(prev => prev ? {
           ...prev,
-          username: editForm.username,
-          bio: editForm.bio,
-          discord_username: editForm.discordUsername,
-          messenger_link: editForm.messengerLink,
-          website: editForm.website,
-          roblox_username: editForm.robloxUsername
+          user: {
+            ...prev.user,
+            username: editForm.username,
+            bio: editForm.bio,
+            discord_username: editForm.discordUsername,
+            messenger_link: editForm.messengerLink,
+            website: editForm.website,
+            roblox_username: editForm.robloxUsername
+          }
         } : null);
       }
 
@@ -259,22 +306,67 @@ export function NewUserProfile() {
   const getAvatarUrl = (avatarUrl?: string) => {
     if (!avatarUrl) return '';
 
-    // If it's already a Cloudinary URL or external URL, return as is
     if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
       return avatarUrl;
     }
 
-    // If it's an old local path, construct Cloudinary URL or return empty
-    // You might want to handle migration of old avatars here
-    console.warn('Found local avatar path, should be migrated to Cloudinary:', avatarUrl);
-    return '';
+    if (avatarUrl.startsWith('/uploads/') || avatarUrl.startsWith('/api/uploads/')) {
+      return `http://localhost:5000${avatarUrl}`;
+    }
+
+    return `http://localhost:5000/uploads/avatars/${avatarUrl}`;
+  };
+
+  const getRoleBadge = (role: string) => {
+    const roleConfig = {
+      admin: { label: 'Admin', variant: 'destructive' as const, icon: Shield },
+      moderator: { label: 'Moderator', variant: 'secondary' as const, icon: Shield },
+      middleman: { label: 'Middleman', variant: 'default' as const, icon: Users },
+      verified: { label: 'Verified', variant: 'default' as const, icon: CheckCircle },
+      user: { label: 'Member', variant: 'outline' as const, icon: Users }
+    };
+
+    const config = roleConfig[role as keyof typeof roleConfig] || roleConfig.user;
+    const Icon = config.icon;
+
+    return (
+      <Badge variant={config.variant} className="flex items-center gap-1">
+        <Icon className="w-3 h-3" />
+        {config.label}
+      </Badge>
+    );
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
+  const formatLastActive = (dateString?: string) => {
+    if (!dateString) return 'Unknown';
+
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
+
+    if (diffInHours < 1) return 'Active now';
+    if (diffInHours < 24) return `Active ${diffInHours}h ago`;
+
+    const diffInDays = Math.floor(diffInHours / 24);
+    if (diffInDays < 7) return `Active ${diffInDays}d ago`;
+    if (diffInDays < 30) return `Active ${Math.floor(diffInDays / 7)}w ago`;
+
+    return `Active ${Math.floor(diffInDays / 30)}mo ago`;
   };
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center min-h-screen">
+      <div className="flex-1 flex items-center justify-center min-h-screen bg-background">
         <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4" />
+          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-muted-foreground" />
           <p className="text-muted-foreground">Loading profile...</p>
         </div>
       </div>
@@ -283,7 +375,7 @@ export function NewUserProfile() {
 
   if (error && !profileData) {
     return (
-      <div className="flex-1 flex items-center justify-center min-h-screen">
+      <div className="flex-1 flex items-center justify-center min-h-screen bg-background">
         <div className="text-center">
           <AlertCircle className="w-8 h-8 text-red-500 mx-auto mb-4" />
           <p className="text-red-500 mb-4">{error}</p>
@@ -296,50 +388,53 @@ export function NewUserProfile() {
   }
 
   return (
-    <div className="min-h-screen bg-white dark:bg-gray-900">
+    <div className="min-h-screen bg-background">
       <div className="max-w-6xl mx-auto p-6">
         {/* Profile Header - Hero Section */}
-        <Card className="mb-8 overflow-hidden shadow-2xl border-0 bg-white dark:bg-gray-800">
+        <Card className="mb-8 overflow-hidden shadow-2xl border-0 bg-card">
           <div className="relative">
             {/* Background Pattern */}
-            <div className="absolute inset-0 bg-gray-100 dark:bg-gray-700"></div>
+            <div className="absolute inset-0 bg-muted/30"></div>
 
             <CardContent className="relative p-8">
               <div className="flex flex-col lg:flex-row items-center lg:items-start gap-8">
                 {/* Avatar Section - Larger */}
                 <div className="relative group">
-                  <div className="absolute -inset-1 bg-gray-300 dark:bg-gray-600 rounded-full blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
+                  <div className="absolute -inset-1 bg-primary/20 rounded-full blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
                   <div className="relative">
-                    <Avatar className="w-32 h-32 border-4 border-white shadow-2xl">
+                    <Avatar className="w-32 h-32 border-4 border-background shadow-2xl">
                       <AvatarImage
-                        src={avatarPreview || getAvatarUrl(profileData?.avatar_url)}
+                        src={avatarPreview || getAvatarUrl(profileData?.user?.avatar_url)}
                         className="object-cover"
                         onError={(e) => {
                           const target = e.target as HTMLImageElement;
                           target.src = '';
                         }}
                       />
-                      <AvatarFallback className="text-3xl bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
-                        {profileData?.username?.[0]?.toUpperCase() || user?.username?.[0]?.toUpperCase() || 'U'}
+                      <AvatarFallback className="text-3xl bg-muted text-muted-foreground">
+                        {profileData?.user?.username?.[0]?.toUpperCase() || user?.username?.[0]?.toUpperCase() || 'U'}
                       </AvatarFallback>
                     </Avatar>
-                    <label className="absolute bottom-1 right-1 bg-blue-500 hover:bg-blue-600 text-white rounded-full p-1.5 cursor-pointer transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105 border-2 border-white z-10">
-                      <Camera className="w-3 h-3" />
+                    <label className="position-absolute bottom-0 end-0 bg-primary text-white rounded-circle p-2 cursor-pointer transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-110 border border-white d-flex align-items-center justify-content-center" style={{ width: '40px', height: '40px', zIndex: 30 }}>
+                      <Camera className="w-5 h-5" />
                       <input
                         type="file"
                         accept="image/*"
                         onChange={handleAvatarSelect}
-                        className="hidden"
+                        className="d-none"
                       />
+                      <span className="visually-hidden">Change avatar</span>
                     </label>
                   </div>
                   {selectedAvatar && (
-                    <div className="absolute -top-3 -right-3 flex gap-2">
+                    <div className="position-absolute top-0 end-0 d-flex gap-2" style={{ zIndex: 40 }}>
                       <Button
                         size="sm"
                         onClick={handleAvatarUpload}
                         disabled={saving}
-                        className="h-8 w-8 p-0 bg-green-500 hover:bg-green-600 shadow-lg"
+                        className="btn btn-success rounded-circle p-2 d-flex align-items-center justify-content-center shadow-lg border border-white"
+                        style={{ width: '36px', height: '36px' }}
+                        title="Save avatar"
                       >
                         {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                       </Button>
@@ -350,7 +445,9 @@ export function NewUserProfile() {
                           setSelectedAvatar(null);
                           setAvatarPreview('');
                         }}
-                        className="h-8 w-8 p-0 shadow-lg"
+                        className="btn btn-danger rounded-circle p-2 d-flex align-items-center justify-content-center shadow-lg border border-white"
+                        style={{ width: '36px', height: '36px' }}
+                        title="Cancel upload"
                       >
                         <X className="w-4 h-4" />
                       </Button>
@@ -363,25 +460,19 @@ export function NewUserProfile() {
                   <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between mb-6">
                     <div className="mb-4 lg:mb-0">
                       <div className="flex items-center gap-4 mb-3 justify-center lg:justify-start">
-                        <h1 className="text-4xl lg:text-5xl font-bold text-gray-900 dark:text-white">
-                          {profileData?.username || user?.username || 'User'}
+                        <h1 className="text-4xl lg:text-5xl font-bold text-card-foreground">
+                          {profileData?.user?.username || 'Loading...'}
                         </h1>
-                        {profileData?.role && ['admin', 'moderator', 'mm', 'mw'].includes(profileData.role) && (
-                          <Badge variant="secondary" className="bg-gray-600 text-white border-0 px-3 py-1 text-sm font-medium">
-                            <CheckCircle className="w-4 h-4 mr-2" />
-                            {profileData.role.toUpperCase()}
-                          </Badge>
-                        )}
+                        {profileData?.user && getRoleBadge(profileData.user.role || 'user')}
                       </div>
-                      <p className="text-xl text-gray-600 dark:text-gray-400 mb-2">
-                        @{profileData?.roblox_username || 'Not set'}
+                      <p className="text-xl text-muted-foreground mb-2">
+                        @{profileData?.user?.roblox_username || 'Not set'}
                       </p>
-                      <p className="text-sm text-gray-500 dark:text-gray-500">
-                        Member since {profileData?.createdAt ? new Date(profileData.createdAt).toLocaleDateString('en-US', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric'
-                        }) : 'Unknown'}
+                      <p className="text-sm text-muted-foreground mb-2">
+                        Member since {profileData?.user?.createdAt ? formatDate(profileData.user.createdAt) : 'Unknown'}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        {profileData?.user?.last_active ? formatLastActive(profileData.user.last_active) : 'Unknown'}
                       </p>
                     </div>
 
@@ -393,15 +484,15 @@ export function NewUserProfile() {
                           Edit Profile
                         </Button>
                       </DialogTrigger>
-                      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-card border-border">
                         <DialogHeader>
-                          <DialogTitle>Edit Profile</DialogTitle>
+                          <DialogTitle className="text-card-foreground">Edit Profile</DialogTitle>
                         </DialogHeader>
 
                         <form onSubmit={handleEditProfile} className="space-y-6 py-4">
                           {/* Profile Information */}
                           <div className="space-y-4">
-                            <h3 className="text-lg font-semibold border-b pb-2">Profile Information</h3>
+                            <h3 className="text-lg font-semibold border-b border-border pb-2 text-card-foreground">Profile Information</h3>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                               <div className="space-y-2">
@@ -488,8 +579,8 @@ export function NewUserProfile() {
                           </div>
 
                           {/* Password Change */}
-                          <div className="space-y-4 border-t pt-6">
-                            <h3 className="text-lg font-semibold border-b pb-2">Change Password</h3>
+                          <div className="space-y-4 border-t border-border pt-6">
+                            <h3 className="text-lg font-semibold border-b border-border pb-2 text-card-foreground">Change Password</h3>
 
                             <div className="bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
                               <div className="space-y-3">
@@ -530,12 +621,12 @@ export function NewUserProfile() {
                           </div>
 
                           {error && (
-                            <div className="text-red-500 text-sm p-3 bg-red-50 dark:bg-red-950 rounded-lg border border-red-200 dark:border-red-800">
+                            <div className="text-red-500 text-sm p-3 bg-red-50 dark:bg-red-950/20 rounded-lg border border-red-200 dark:border-red-800">
                               {error}
                             </div>
                           )}
 
-                          <div className="flex justify-end gap-3 pt-4 border-t">
+                          <div className="flex justify-end gap-3 pt-4 border-t border-border">
                             <Button type="button" variant="outline" onClick={() => setIsEditDialogOpen(false)} disabled={saving}>
                               Cancel
                             </Button>
@@ -558,46 +649,24 @@ export function NewUserProfile() {
                     </Dialog>
                   </div>
 
-                  {/* Enhanced Stats */}
-                  <div className="grid grid-cols-3 gap-6 mb-6">
-                    <div className="text-center p-4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-                      <div className="text-3xl font-bold text-gray-900 dark:text-white mb-1">
-                        {profileData?.totalVouches || 0}
-                      </div>
-                      <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Vouches</div>
-                    </div>
-                    <div className="text-center p-4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-                      <div className="text-lg font-bold text-gray-900 dark:text-white mb-1">
-                        {profileData?.wishlistItems && profileData.wishlistItems.length > 0 ? (
-                          <div className="space-y-1">
-                            {profileData.wishlistItems.slice(0, 3).map((item) => (
-                              <div key={item.wishlist_id} className="text-sm truncate">
-                                {item.item_name}
-                              </div>
-                            ))}
-                            {profileData.wishlistItems.length > 3 && (
-                              <div className="text-xs text-gray-500 dark:text-gray-400">
-                                +{profileData.wishlistItems.length - 3} more
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          'No items'
-                        )}
-                      </div>
-                      <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Wishlist Items</div>
-                    </div>
-                      <div className="text-center p-4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-                        <div className="text-3xl font-bold text-gray-900 dark:text-white mb-1">
-                          {profileData?.createdAt ? new Date(profileData.createdAt).toLocaleDateString('en-US', {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric'
-                          }) : 'N/A'}
-                        </div>
-                        <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Member Since</div>
-                      </div>
-                  </div>
+                  {/* Stats */}
+                  <div className="grid grid-cols-2 lg:grid-cols-2 gap-4 mb-6">
+                                    <div className="text-center p-4 bg-card rounded-xl border border-border">
+                                      <div className="text-2xl font-bold text-blue-600 dark:text-blue-400 mb-1">
+                                        {profileData?.stats?.totalVouches || 0}
+                                      </div>
+                                      <div className="text-sm font-medium text-muted-foreground">Vouches</div>
+                                    </div>
+                                    <div className="text-center p-4 bg-card rounded-xl border border-border">
+                                      <div className="flex items-center justify-center mb-1">
+                                        <Award className="w-6 h-6 text-yellow-500 mr-1" />
+                                        <span className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
+                                          {profileData?.user?.credibility_score || 0}
+                                        </span>
+                                      </div>
+                                      <div className="text-sm font-medium text-muted-foreground">Credibility</div>
+                                    </div>
+                                  </div>
                 </div>
               </div>
             </CardContent>
@@ -608,89 +677,101 @@ export function NewUserProfile() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Main Content - Bio and Links */}
           <div className="lg:col-span-2 space-y-8">
-            {/* Bio Section - Enhanced */}
-            {profileData?.bio && (
-              <Card className="shadow-xl border-0 bg-white dark:bg-gray-800">
+            {/* Bio Section */}
+            {profileData?.user?.bio && (
+              <Card className="shadow-xl border-0 bg-card">
                 <CardHeader className="pb-4">
-                  <CardTitle className="text-2xl text-gray-900 dark:text-white">
-                    About Me
+                  <CardTitle className="text-2xl text-card-foreground">
+                    About
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-gray-700 dark:text-gray-300 leading-relaxed text-lg">
-                    {profileData.bio}
+                  <p className="text-card-foreground leading-relaxed text-lg">
+                    {profileData.user.bio}
                   </p>
                 </CardContent>
               </Card>
             )}
 
             {/* Contact Information - Enhanced */}
-            <Card className="shadow-xl border-0 bg-white dark:bg-gray-800">
+            <Card className="shadow-xl border-0 bg-card">
               <CardHeader className="pb-4">
-                <CardTitle className="text-2xl text-gray-900 dark:text-white">
+                <CardTitle className="text-2xl text-card-foreground">
                   Contact Information
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {profileData?.discord_username && (
-                    <div className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-xl border border-gray-200 dark:border-gray-600">
+                <div className="grid grid-cols-1 gap-4">
+                  {profileData?.user?.discord_username && (
+                    <div className="flex items-center gap-4 p-4 bg-muted rounded-xl border border-border">
                       <div className="p-3 bg-blue-500 rounded-full">
                         <MessageSquare className="w-6 h-6 text-white" />
                       </div>
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900 dark:text-white">Discord</p>
-                        <p className="text-sm text-gray-600 dark:text-gray-400">{profileData.discord_username}</p>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-card-foreground">Discord</p>
+                        <p className="text-sm text-muted-foreground truncate">{profileData.user.discord_username}</p>
                       </div>
                     </div>
                   )}
 
-                  {profileData?.messenger_link && (
-                    <div className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-xl border border-gray-200 dark:border-gray-600">
+                  {profileData?.user?.messenger_link && (
+                    <div className="flex items-center gap-4 p-4 bg-muted rounded-xl border border-border">
                       <div className="p-3 bg-green-500 rounded-full">
                         <MessageCircle className="w-6 h-6 text-white" />
                       </div>
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900 dark:text-white">Messenger</p>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-card-foreground">Messenger</p>
                         <a
-                          href={profileData.messenger_link}
+                          href={profileData.user.messenger_link}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline truncate block"
                         >
-                          {profileData.messenger_link}
+                          {profileData.user.messenger_link}
                         </a>
                       </div>
                     </div>
                   )}
 
-                  {profileData?.website && (
-                    <div className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-xl border border-gray-200 dark:border-gray-600">
+                  {profileData?.user?.website && (
+                    <div className="flex items-center gap-4 p-4 bg-muted rounded-xl border border-border">
                       <div className="p-3 bg-purple-500 rounded-full">
                         <Globe className="w-6 h-6 text-white" />
                       </div>
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900 dark:text-white">Website</p>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-card-foreground">Website</p>
                         <a
-                          href={profileData.website}
+                          href={profileData.user.website}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline truncate block"
                         >
-                          {profileData.website}
+                          {profileData.user.website}
                         </a>
                       </div>
                     </div>
                   )}
 
-                  <div className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-xl border border-gray-200 dark:border-gray-600">
+                  {profileData?.user?.location && (
+                    <div className="flex items-center gap-4 p-4 bg-muted rounded-xl border border-border">
+                      <div className="p-3 bg-red-500 rounded-full">
+                        <Globe className="w-6 h-6 text-white" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-card-foreground">Location</p>
+                        <p className="text-sm text-muted-foreground truncate">{profileData.user.location}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-4 p-4 bg-muted rounded-xl border border-border">
                     <div className="p-3 bg-indigo-500 rounded-full">
                       <Calendar className="w-6 h-6 text-white" />
                     </div>
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900 dark:text-white">Member Since</p>
-                      <p className="text-sm text-gray-600 dark:text-gray-400">
-                        {profileData?.createdAt ? new Date(profileData.createdAt).toLocaleDateString('en-US', {
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-card-foreground">Member Since</p>
+                      <p className="text-sm text-muted-foreground">
+                        {profileData?.user?.createdAt ? new Date(profileData.user.createdAt).toLocaleDateString('en-US', {
                           year: 'numeric',
                           month: 'long',
                           day: 'numeric'
@@ -705,67 +786,155 @@ export function NewUserProfile() {
 
           {/* Sidebar - Additional Info */}
           <div className="space-y-8">
+            {/* Vouches Section */}
+            {(profileData?.vouches && profileData.vouches.length > 0) || (profileData?.middlemanVouches && profileData.middlemanVouches.length > 0) && (
+              <Card className="shadow-xl border-0 bg-card">
+                <CardHeader className="pb-4">
+                  <CardTitle className="text-xl text-card-foreground flex items-center gap-2">
+                    <Award className="w-5 h-5 text-yellow-500" />
+                    Recent Vouches ({profileData.stats.totalVouches})
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Trade Vouches */}
+                  {profileData.vouches && profileData.vouches.length > 0 && (
+                    <div className="space-y-3">
+                      <h4 className="text-sm font-semibold text-muted-foreground border-b border-border pb-2">Trade Vouches</h4>
+                      {profileData.vouches.map((vouch) => (
+                        <div key={vouch.id} className="flex items-start gap-3 p-3 bg-muted/50 rounded-lg border border-border">
+                          <Avatar className="w-8 h-8">
+                            <AvatarImage
+                              src={getAvatarUrl(vouch.given_by.avatar_url)}
+                              className="object-cover"
+                            />
+                            <AvatarFallback className="text-xs bg-muted text-muted-foreground">
+                              {vouch.given_by.username[0]?.toUpperCase() || 'U'}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-sm font-semibold text-card-foreground truncate">
+                                {vouch.given_by.username}
+                              </span>
+                              <div className="flex items-center">
+                                {[...Array(5)].map((_, i) => (
+                                  <Award
+                                    key={i}
+                                    className={`w-3 h-3 ${
+                                      i < vouch.rating
+                                        ? 'text-yellow-500 fill-yellow-500'
+                                        : 'text-muted-foreground'
+                                    }`}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                            {vouch.comment && (
+                              <p className="text-sm text-muted-foreground line-clamp-2">
+                                {vouch.comment}
+                              </p>
+                            )}
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {new Date(vouch.created_at).toLocaleDateString('en-US', {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric'
+                              })}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Middleman Vouches */}
+                  {profileData.middlemanVouches && profileData.middlemanVouches.length > 0 && (
+                    <div className="space-y-3">
+                      <h4 className="text-sm font-semibold text-muted-foreground border-b border-border pb-2">Middleman Vouches</h4>
+                      {profileData.middlemanVouches.map((vouch) => (
+                        <div key={vouch.id} className="flex items-start gap-3 p-3 bg-muted/50 rounded-lg border border-border">
+                          <Avatar className="w-8 h-8">
+                            <AvatarImage
+                              src={getAvatarUrl(vouch.given_by.avatar_url)}
+                              className="object-cover"
+                            />
+                            <AvatarFallback className="text-xs bg-muted text-muted-foreground">
+                              {vouch.given_by.username[0]?.toUpperCase() || 'U'}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-sm font-semibold text-card-foreground truncate">
+                                {vouch.given_by.username}
+                              </span>
+                              <div className="flex items-center">
+                                {[...Array(5)].map((_, i) => (
+                                  <Award
+                                    key={i}
+                                    className={`w-3 h-3 ${
+                                      i < vouch.rating
+                                        ? 'text-yellow-500 fill-yellow-500'
+                                        : 'text-muted-foreground'
+                                    }`}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                            {vouch.comment && (
+                              <p className="text-sm text-muted-foreground line-clamp-2">
+                                {vouch.comment}
+                              </p>
+                            )}
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {new Date(vouch.created_at).toLocaleDateString('en-US', {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric'
+                              })}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Total count message */}
+                  {((profileData.vouches?.length || 0) + (profileData.middlemanVouches?.length || 0)) < profileData.stats.totalVouches && (
+                    <div className="text-center pt-2">
+                      <span className="text-sm text-muted-foreground">
+                        And {profileData.stats.totalVouches - ((profileData.vouches?.length || 0) + (profileData.middlemanVouches?.length || 0))} more vouches...
+                      </span>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
             {/* Account Details */}
-            <Card className="shadow-xl border-0 bg-white dark:bg-gray-800">
+            <Card className="shadow-xl border-0 bg-card">
               <CardHeader className="pb-4">
-                <CardTitle className="text-xl text-gray-900 dark:text-white">
+                <CardTitle className="text-xl text-card-foreground">
                   Account Details
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Username</span>
-                  <span className="text-sm font-semibold text-gray-900 dark:text-white">{profileData?.username || 'N/A'}</span>
+                <div className="flex justify-between items-center py-2 border-b border-border">
+                  <span className="text-sm font-medium text-muted-foreground">Username</span>
+                  <span className="text-sm font-semibold text-card-foreground">{profileData?.user?.username || 'Loading...'}</span>
                 </div>
-                <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Roblox</span>
-                  <span className="text-sm font-semibold text-gray-900 dark:text-white">@{profileData?.roblox_username || 'Not set'}</span>
+                <div className="flex justify-between items-center py-2 border-b border-border">
+                  <span className="text-sm font-medium text-muted-foreground">Roblox</span>
+                  <span className="text-sm font-semibold text-card-foreground">@{profileData?.user?.roblox_username || 'Not set'}</span>
                 </div>
-                <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Role</span>
-                  <Badge variant="outline" className="text-xs">
-                    {profileData?.role || 'user'}
-                  </Badge>
+                <div className="flex justify-between items-center py-2 border-b border-border">
+                  <span className="text-sm font-medium text-muted-foreground">Role</span>
+                  {profileData?.user ? getRoleBadge(profileData.user.role || 'user') : <span className="text-sm">Loading...</span>}
                 </div>
                 <div className="flex justify-between items-center py-2">
-                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Email</span>
-                  <span className="text-sm font-semibold text-gray-900 dark:text-white">{profileData?.email || 'N/A'}</span>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Quick Stats */}
-            <Card className="shadow-xl border-0 bg-white dark:bg-gray-800">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-xl text-gray-900 dark:text-white">
-                  Quick Stats
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="text-center p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                  <div className="text-2xl font-bold text-gray-900 dark:text-white">{profileData?.totalVouches || 0}</div>
-                  <div className="text-sm text-gray-600 dark:text-gray-400">Vouches</div>
-                </div>
-                <div className="text-center p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                  <div className="text-lg font-bold text-gray-900 dark:text-white mb-2">
-                    {profileData?.wishlistItems && profileData.wishlistItems.length > 0 ? (
-                      <div className="space-y-1">
-                        {profileData.wishlistItems.slice(0, 3).map((item) => (
-                          <div key={item.wishlist_id} className="text-sm truncate">
-                            {item.item_name}
-                          </div>
-                        ))}
-                        {profileData.wishlistItems.length > 3 && (
-                          <div className="text-xs text-gray-500 dark:text-gray-400">
-                            +{profileData.wishlistItems.length - 3} more
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      'No items'
-                    )}
-                  </div>
-                  <div className="text-sm text-gray-600 dark:text-gray-400">Wishlist Items</div>
+                  <span className="text-sm font-medium text-muted-foreground">Member Since</span>
+                  <span className="text-sm font-semibold text-card-foreground">
+                    {profileData?.user?.createdAt ? formatDate(profileData.user.createdAt) : 'Unknown'}
+                  </span>
                 </div>
               </CardContent>
             </Card>
