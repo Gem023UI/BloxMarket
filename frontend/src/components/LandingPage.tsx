@@ -46,7 +46,7 @@ export function LandingPage() {
         {/* Hero Section */}
         <div className="text-center text-white">
           {/* Logo Section */}
-          <div className="inline-flex items-center justify-center w-24 h-24 mb-6 rounded-3xl shadow-2xl bg-white/10 backdrop-blur-md border border-white/20">
+          <div className="inline-flex items-center justify-center w-24 h-24 mb-6 rounded-3xl shadow-2xl bg-white/10 backdrop-blur-md">
             <img
               src={logoPath}
               alt="BloxMarket Logo"
