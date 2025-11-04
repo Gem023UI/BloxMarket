@@ -18,8 +18,7 @@ import {
   Loader2,
   Shield,
   RefreshCw,
-  AlertTriangle,
-  Download
+  AlertTriangle
 } from 'lucide-react';
 
 declare global {
@@ -97,6 +96,55 @@ export function MiddlemanVerification() {
   const dataTableRef = useRef<any>(null);
   const isInitialized = useRef(false);
 
+  // Helper function to view face verification image with authentication
+  const viewFaceVerificationImage = async (filename: string) => {
+    try {
+      const token = localStorage.getItem('bloxmarket-token');
+      const response = await fetch(`http://localhost:5000/api/verification/face-images/${filename}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        if (response.status === 403) {
+          throw new Error('Access denied - insufficient permissions');
+        } else if (response.status === 404) {
+          throw new Error('Face verification image not found');
+        } else {
+          throw new Error('Failed to fetch face verification image');
+        }
+      }
+
+      // Create a blob from the response
+      const blob = await response.blob();
+      
+      // Create a temporary URL for the blob
+      const url = window.URL.createObjectURL(blob);
+      
+      // Open the image in a new tab for viewing
+      const newWindow = window.open(url, '_blank');
+      
+      if (!newWindow) {
+        // If popup was blocked, offer alternative
+        toast.error('Popup blocked. Please allow popups and try again.');
+        return;
+      }
+      
+      toast.success('Face verification image opened in new tab');
+      
+      // Clean up the blob URL after a delay
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+      }, 1000);
+    } catch (error) {
+      console.error('Error viewing face verification image:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to view face verification image';
+      toast.error(errorMessage);
+    }
+  };
+
   // Helper function to get avatar URL
   const getAvatarUrl = (avatarUrl?: string) => {
     if (!avatarUrl) return '';
@@ -154,6 +202,9 @@ export function MiddlemanVerification() {
       setLoading(true);
       setError('');
       
+      // Ensure any existing DataTable is destroyed
+      destroyDataTable();
+      
       console.log('Loading verification requests...');
       
       const response = await apiService.getMiddlemanVerificationDataTable({
@@ -167,7 +218,10 @@ export function MiddlemanVerification() {
       
       console.log('API Response:', response);
       
-      if (!response || !response.data) {
+      // Type the response properly
+      const typedResponse = response as { data?: VerificationRequest[] };
+      
+      if (!typedResponse || !Array.isArray(typedResponse.data)) {
         console.log('No data in response, using empty array');
         setRequests([]);
         setLoading(false);
@@ -175,7 +229,7 @@ export function MiddlemanVerification() {
       }
       
       // Normalize the request data
-      const normalizedRequests = response.data
+      const normalizedRequests = typedResponse.data
         .filter((request: unknown) => {
           const req = request as VerificationRequest;
           return req && req._id;
@@ -224,6 +278,34 @@ export function MiddlemanVerification() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const destroyDataTable = useCallback(() => {
+    if (!window.$ || !window.$.fn || !window.$.fn.DataTable) {
+      return;
+    }
+
+    const $ = window.$;
+    try {
+      if (tableRef.current) {
+        // First remove event handlers
+        $(tableRef.current).off();
+        
+        // Then check if it's a DataTable and destroy it
+        if ($.fn.DataTable.isDataTable(tableRef.current)) {
+          const dt = $(tableRef.current).DataTable();
+          dt.destroy();
+          // Clear the table content
+          $(tableRef.current).empty();
+        }
+      }
+      
+      // Always reset refs even if table element is not available
+      dataTableRef.current = null;
+      isInitialized.current = false;
+    } catch (error) {
+      console.warn('Error destroying DataTable:', error);
+    }
+  }, []);
+
   const initializeDataTable = useCallback((requestData: VerificationRequest[]) => {
     if (!window.$ || !window.$.fn || !window.$.fn.DataTable) {
       console.error('jQuery or DataTables not available');
@@ -242,17 +324,7 @@ export function MiddlemanVerification() {
     
     try {
       // Destroy existing instance if exists
-      if (dataTableRef.current) {
-        try {
-          $(tableRef.current).off();
-          if ($.fn.DataTable.isDataTable(tableRef.current)) {
-            dataTableRef.current.destroy();
-          }
-        } catch (destroyError) {
-          console.warn('Error destroying existing DataTable:', destroyError);
-        }
-        dataTableRef.current = null;
-      }
+      destroyDataTable();
 
       // Initialize new DataTable
       dataTableRef.current = $(tableRef.current).DataTable({
@@ -415,9 +487,10 @@ export function MiddlemanVerification() {
             // Event handlers
       $(tableRef.current).off(); // Remove old handlers
       
-      $(tableRef.current).on('click', '.view-btn', function(e) {
+      $(tableRef.current).on('click', '.view-btn', function(this: HTMLElement, e: JQuery.ClickEvent) {
         e.preventDefault();
-        const requestId = $(this).data('request-id');
+        const $btn = $(this);
+        const requestId = $btn.data('request-id') as string;
         const request = requestData.find((r: VerificationRequest) => r && r._id === requestId);
         if (request) {
           setSelectedRequest(request);
@@ -425,15 +498,17 @@ export function MiddlemanVerification() {
         }
       });
 
-      $(tableRef.current).on('click', '.approve-btn', function(e) {
+      $(tableRef.current).on('click', '.approve-btn', function(this: HTMLElement, e: JQuery.ClickEvent) {
         e.preventDefault();
-        const requestId = $(this).data('request-id');
+        const $btn = $(this);
+        const requestId = $btn.data('request-id') as string;
         handleApprove(requestId);
       });
 
-      $(tableRef.current).on('click', '.reject-btn', function(e) {
+      $(tableRef.current).on('click', '.reject-btn', function(this: HTMLElement, e: JQuery.ClickEvent) {
         e.preventDefault();
-        const requestId = $(this).data('request-id');
+        const $btn = $(this);
+        const requestId = $btn.data('request-id') as string;
         const request = requestData.find((r: VerificationRequest) => r && r._id === requestId);
         if (request) openRejectDialog(request);
       });
@@ -460,34 +535,29 @@ export function MiddlemanVerification() {
     
     // Cleanup function
     return () => {
-      const tableElement = tableRef.current; // eslint-disable-line react-hooks/exhaustive-deps
-      if (dataTableRef.current && window.$ && window.$.fn && window.$.fn.DataTable) {
-        try {
-          const $ = window.$;
-          if (tableElement && $.fn.DataTable.isDataTable(tableElement)) {
-            $(tableElement).off(); // Remove event handlers first
-            dataTableRef.current.destroy();
-          }
-          dataTableRef.current = null;
-          isInitialized.current = false;
-        } catch (error) {
-          console.error('Error destroying DataTable during cleanup:', error);
-        }
-      }
+      destroyDataTable();
     };
-  }, [jQueryReady, loadVerificationRequests]);
+  }, [jQueryReady, loadVerificationRequests, destroyDataTable]);
 
   const handleViewDocument = async (documentId: string) => {
     try {
       // Fetch the document with authentication
+      const token = localStorage.getItem('bloxmarket-token');
       const response = await fetch(`http://localhost:5000/api/verification/documents/${documentId}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('bloxmarket-token')}`
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
         }
       });
 
       if (!response.ok) {
-        throw new Error('Failed to fetch document');
+        if (response.status === 403) {
+          throw new Error('Access denied - insufficient permissions');
+        } else if (response.status === 404) {
+          throw new Error('Document not found');
+        } else {
+          throw new Error('Failed to fetch document');
+        }
       }
 
       // Create a blob from the response
@@ -497,21 +567,40 @@ export function MiddlemanVerification() {
       const url = window.URL.createObjectURL(blob);
       
       // Open the document in a new tab for viewing
-      window.open(url, '_blank');
+      const newWindow = window.open(url, '_blank');
+      
+      if (!newWindow) {
+        // If popup was blocked, offer alternative
+        toast.error('Popup blocked. Please allow popups and try again.');
+        return;
+      }
       
       toast.success('Document opened in new tab');
+      
+      // Clean up the blob URL after a delay
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+      }, 1000);
     } catch (error) {
       console.error('Error viewing document:', error);
-      toast.error('Failed to view document');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to view document';
+      toast.error(errorMessage);
     }
   };
 
   const handleApprove = async (applicationId: string) => {
     try {
       setActionLoading(applicationId);
+      // Destroy DataTable before making changes
+      destroyDataTable();
+      
       await apiService.approveMiddlemanApplication(applicationId);
       toast.success('Application approved successfully');
-      loadVerificationRequests();
+      
+      // Add a small delay before reloading to ensure DOM is ready
+      setTimeout(() => {
+        loadVerificationRequests();
+      }, 100);
     } catch (error) {
       console.error('Error approving application:', error);
       toast.error('Failed to approve application');
@@ -523,9 +612,17 @@ export function MiddlemanVerification() {
   const handleReject = async (applicationId: string, reason: string) => {
     try {
       setActionLoading(applicationId);
+      // Destroy DataTable before making changes
+      destroyDataTable();
+      
       await apiService.rejectMiddlemanApplication(applicationId, reason);
       toast.success('Application rejected');
-      loadVerificationRequests();
+      
+      // Add a small delay before reloading to ensure DOM is ready
+      setTimeout(() => {
+        loadVerificationRequests();
+      }, 100);
+      
       setRejectDialogOpen(false);
       setRejectionReason('');
     } catch (error) {
@@ -737,6 +834,8 @@ export function MiddlemanVerification() {
             </DialogDescription>
           </DialogHeader>
           
+
+          
           {selectedRequest && (
             <div className="space-y-6">
               <div className="flex items-center gap-4">
@@ -848,172 +947,164 @@ export function MiddlemanVerification() {
               
               {selectedRequest.documents && selectedRequest.documents.length > 0 && (
                 <div>
-                  <h4 className="font-semibold mb-3">Submitted Documents</h4>
+                  <h4 className="font-semibold mb-3">Submitted Documents ({selectedRequest.documents.length})</h4>
                   <div className="flex flex-wrap gap-2">
                     {selectedRequest.documents.map((doc, i) => (
                       <Badge key={i} variant="outline" className="flex items-center gap-1">
                         <FileText className="w-3 h-3" />
-                        {doc.document_type || doc.original_filename || `Document ${i+1}`}
+                        {doc.document_type === 'face_verification' ? 'Face Verification' : (doc.document_type || doc.original_filename || `Document ${i+1}`)}
                       </Badge>
                     ))}
                   </div>
-                  <div className="mt-4 grid grid-cols-2 gap-4">
-                    {/* Applicant's Camera Photo */}
-                    <div className="border rounded-md p-2">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="font-medium">Camera Verification Photo</span>
-                        <Badge className="bg-green-100 text-green-800">
-                          <Shield className="w-3 h-3 mr-1" />
-                          Security Proof
-                        </Badge>
-                      </div>
-                      <div className="aspect-square bg-gray-100 rounded-md overflow-hidden mb-2">
-                        <img
-                          src={`http://localhost:5000/uploads/middlemanface/${selectedRequest.user_id?._id || selectedRequest._id}_camera.jpg`}
-                          alt="Camera verification photo"
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            const target = e.target as HTMLImageElement;
-                            // Try alternative naming patterns
-                            const alternativeSrcs = [
-                              `http://localhost:5000/uploads/middlemanface/${selectedRequest.user_id?._id || selectedRequest._id}_face.jpg`,
-                              `http://localhost:5000/uploads/middlemanface/${selectedRequest.username}_camera.jpg`,
-                              `http://localhost:5000/uploads/middlemanface/camera_${selectedRequest._id}.jpg`
-                            ];
-                            
-                            let currentIndex = 0;
-                            
-                            const tryNextSrc = () => {
-                              if (currentIndex < alternativeSrcs.length) {
-                                target.src = alternativeSrcs[currentIndex];
-                                currentIndex++;
-                              } else {
-                                // All sources failed, show placeholder
-                                target.style.display = 'none';
-                                const parent = target.parentElement;
-                                if (parent) {
-                                  parent.innerHTML = `
-                                    <div class="w-full h-full flex items-center justify-center bg-gray-200 text-gray-500">
-                                      <div class="text-center">
-                                        <Shield className="w-8 h-8 mx-auto mb-2 text-gray-400" />
-                                        <p class="text-xs">Camera photo not available</p>
-                                      </div>
-                                    </div>
-                                  `;
-                                }
-                              }
-                            };
-                            
-                            target.onerror = tryNextSrc;
-                            tryNextSrc();
-                          }}
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
-                        <Shield className="w-3 h-3" />
-                        <span>Live camera capture for identity verification</span>
-                      </div>
-                      <Button 
-                        size="sm" 
-                        variant="outline" 
-                        className="w-full text-xs h-7"
-                        onClick={() => {
-                          // Open camera photo in new tab for detailed review
-                          const img = document.querySelector('img[alt="Camera verification photo"]') as HTMLImageElement;
-                          if (img && img.src && !img.src.includes('placeholder')) {
-                            window.open(img.src, '_blank');
-                          } else {
-                            toast.error('Camera photo not available for viewing');
-                          }
-                        }}
-                      >
-                        <Eye className="w-3 h-3 mr-1" />
-                        View Full Size
-                      </Button>
-                    </div>
-
-                    {/* Other Documents */}
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* All Documents including Face Verification */}
                     {selectedRequest.documents.map((doc, i) => (
-                      <div key={i} className="border rounded-md p-2">
+                      <div key={i} className="border rounded-md p-3">
                         <div className="flex items-center justify-between mb-2">
-                          <span className="font-medium">{doc.document_type || 'Document'}</span>
-                          <Badge className={doc.status === 'approved' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}>
+                          <div className="flex items-center gap-2">
+                            {doc.document_type === 'face_verification' ? (
+                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                                Face Verification
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline">{doc.document_type || 'Document'}</Badge>
+                            )}
+                            <span className="text-sm text-muted-foreground truncate max-w-[150px]" title={doc.original_filename}>
+                              {doc.original_filename}
+                            </span>
+                          </div>
+                          <Badge variant={doc.status === 'approved' ? 'default' : doc.status === 'rejected' ? 'destructive' : 'secondary'}>
                             {doc.status}
                           </Badge>
                         </div>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
                           <FileText className="w-3 h-3" />
-                          <span>{doc.original_filename}</span>
+                          <span>{(doc.file_size / 1024).toFixed(1)} KB</span>
+                          <span>•</span>
+                          <span>{new Date(doc.createdAt).toLocaleDateString()}</span>
                         </div>
-                        <Button 
-                          size="sm" 
-                          variant="outline" 
-                          className="mt-2 text-xs h-7 w-full"
-                          onClick={() => handleViewDocument(doc._id)}
-                        >
-                          <Eye className="w-3 h-3 mr-1" />
-                          View Document
-                        </Button>
+                        
+                        {/* Preview for face verification photos */}
+                        {doc.document_type === 'face_verification' && doc.filename && (
+                          <div className="mt-2 mb-3">
+                            <div className="relative aspect-video bg-muted rounded-md overflow-hidden">
+                              <img
+                                src={`http://localhost:5000/uploads/middlemanface/${doc.filename}`}
+                                alt="Face Verification Photo"
+                                className="w-full h-full object-cover"
+                                onLoad={() => {
+                                  console.log('Face verification image loaded via direct path:', doc.filename);
+                                }}
+                                onError={async (e) => {
+                                  console.log('Direct image failed, trying API with auth for:', doc.filename);
+                                  const target = e.target as HTMLImageElement;
+                                  
+                                  try {
+                                    const token = localStorage.getItem('bloxmarket-token');
+                                    const response = await fetch(`http://localhost:5000/api/verification/face-images/${doc.filename}`, {
+                                      headers: {
+                                        'Authorization': `Bearer ${token}`
+                                      }
+                                    });
+                                    
+                                    if (response.ok) {
+                                      const blob = await response.blob();
+                                      const url = URL.createObjectURL(blob);
+                                      target.src = url;
+                                      console.log('Face verification image loaded via authenticated API:', doc.filename);
+                                      
+                                      // Clean up blob URL after image loads
+                                      target.onload = () => URL.revokeObjectURL(url);
+                                    } else {
+                                      throw new Error(`API request failed with status ${response.status}`);
+                                    }
+                                  } catch (err) {
+                                    console.error('Both direct and authenticated API access failed:', err);
+                                    target.src = 'https://via.placeholder.com/300x200?text=Face+Verification+Image+Unavailable';
+                                    target.alt = 'Face verification image unavailable';
+                                  }
+                                }}
+                              />
+                              <div className="absolute top-2 left-2">
+                                <Badge variant="secondary" className="text-xs">
+                                  Face Verification
+                                </Badge>
+                              </div>
+                              <div className="absolute bottom-2 right-2">
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  className="text-xs h-6 px-2"
+                                  onClick={() => viewFaceVerificationImage(doc.filename)}
+                                >
+                                  <Eye className="w-3 h-3" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Preview for regular documents */}
+                        {doc.document_type !== 'face_verification' && (
+                          <div className="mt-2 mb-3">
+                            <div className="aspect-video bg-muted rounded-md flex items-center justify-center">
+                              <div className="text-center">
+                                <FileText className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
+                                <p className="text-xs text-muted-foreground">Document File</p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        
+                        <div className="flex gap-2 mt-2">
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            className="text-xs h-7 flex-1"
+                            onClick={() => {
+                              if (doc.document_type === 'face_verification' && doc.filename) {
+                                // For face verification, use the authenticated function
+                                viewFaceVerificationImage(doc.filename);
+                              } else {
+                                // For other documents, use the document viewer
+                                handleViewDocument(doc._id);
+                              }
+                            }}
+                          >
+                            <Eye className="w-3 h-3 mr-1" />
+                            View Full {doc.document_type === 'face_verification' ? 'Photo' : 'Document'}
+                          </Button>
+                          {doc.description && (
+                            <Button 
+                              size="sm" 
+                              variant="ghost" 
+                              className="text-xs h-7 px-2"
+                              title={doc.description}
+                            >
+                              <FileText className="w-3 h-3" />
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
-
-              {/* Face Verification Images */}
-              {selectedRequest.documents && selectedRequest.documents.filter(doc => doc.document_type === 'face_verification').length > 0 && (
-                <div>
-                  <h4 className="font-semibold mb-3">Face Verification Images</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {selectedRequest.documents
-                      .filter(doc => doc.document_type === 'face_verification')
-                      .map((doc, i) => (
-                        <div key={i} className="border rounded-md p-3">
-                          <div className="aspect-square bg-gray-100 rounded-md overflow-hidden mb-2">
-                            <img
-                              src={`http://localhost:5000/uploads/middlemanface/${doc.filename}`}
-                              alt={`Face verification ${i + 1}`}
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                const target = e.target as HTMLImageElement;
-                                target.src = '/placeholder-avatar.png'; // Fallback image
-                              }}
-                            />
-                          </div>
-                          <div className="text-center">
-                            <p className="text-sm text-muted-foreground">Face Image {i + 1}</p>
-                            <Badge className={doc.status === 'approved' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}>
-                              {doc.status}
-                            </Badge>
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                  <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
-                    <div className="flex items-start gap-2">
-                      <Shield className="w-5 h-5 text-blue-600 mt-0.5" />
-                      <div>
-                        <p className="text-sm font-medium text-blue-800">Face Verification Review</p>
-                        <p className="text-xs text-blue-700 mt-1">
-                          Review these images to verify the applicant's identity. Ensure the face is clearly visible and matches the profile information.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               )}
 
-
-              
-              {selectedRequest.status === 'pending' && (
+              {selectedRequest?.status === 'pending' && (
                 <div className="flex items-center gap-3 pt-4 border-t">
                   <Button
                     className="bg-green-500 hover:bg-green-600 text-white"
                     onClick={() => {
-                      handleApprove(selectedRequest._id);
-                      setIsViewDialogOpen(false);
+                      if (selectedRequest._id) {
+                        handleApprove(selectedRequest._id);
+                        setIsViewDialogOpen(false);
+                      }
                     }}
-                    disabled={actionLoading === selectedRequest._id}
+                    disabled={actionLoading === selectedRequest?._id}
                   >
                     <CheckCircle className="w-4 h-4 mr-2" />
                     Approve Application
@@ -1022,18 +1113,18 @@ export function MiddlemanVerification() {
                   <Button
                     variant="destructive"
                     onClick={() => {
-                      handleReject(selectedRequest._id, rejectionReason || 'Application does not meet requirements');
-                      setIsViewDialogOpen(false);
+                      if (selectedRequest._id) {
+                        handleReject(selectedRequest._id, rejectionReason || 'Application does not meet requirements');
+                        setIsViewDialogOpen(false);
+                      }
                     }}
-                    disabled={actionLoading === selectedRequest._id}
+                    disabled={actionLoading === selectedRequest?._id}
                   >
                     <XCircle className="w-4 h-4 mr-2" />
                     Reject Application
                   </Button>
                 </div>
               )}
-            </div>
-          )}
         </DialogContent>
       </Dialog>
     </div>

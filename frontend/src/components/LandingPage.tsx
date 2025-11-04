@@ -10,8 +10,6 @@ export function LandingPage() {
   const { setCurrentPage } = useApp();
   const { isLoggedIn } = useAuth();
 
-  const logoPath = '/BLOX.png';
-
   const handleGetStarted = () => {
     setCurrentPage('auth');
   };
@@ -24,7 +22,7 @@ export function LandingPage() {
     <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
       {/* Background Image */}
       <div
-        className="absolute inset-0 bg-cover bg-center bg-no-repeat before:absolute before:inset-0 before:bg-gradient-to-br before:from-black/40 before:to-purple-800/40"
+        className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{
           backgroundImage: `url('/landingpage.jpg')`,
         }}
@@ -45,15 +43,16 @@ export function LandingPage() {
 
         {/* Hero Section */}
         <div className="text-center text-white">
-          {/* Logo Section */}
-          <div className="inline-flex items-center justify-center w-24 h-24 mb-6 rounded-3xl shadow-2xl bg-white/10 backdrop-blur-md">
-            <img
-              src={logoPath}
-              alt="BloxMarket Logo"
-              className="w-auto h-30 object-cover drop-shadow-lg"
-            />
+          {/* Logo */}
+          <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-3xl mb-6 shadow-2xl">
+            <span className="text-white font-bold text-3xl">BM</span>
           </div>
 
+          {/* Main Heading with float and glow animation */}
+          <h1 className="text-5xl md:text-7xl font-bold mb-6 bg-gradient-to-r from-white via-blue-100 to-purple-100 bg-clip-text text-transparent animate-float animate-glow">
+            BloxMarket
+          </h1>
+          
           {/* Subtitle with fade-in and slight movement */}
           <p className="text-xl md:text-2xl text-gray-200 mb-8 max-w-3xl mx-auto leading-relaxed animate-fadeInUp">
             The ultimate Roblox trading community. Buy, sell, and trade your favorite Roblox items with confidence in a secure, verified marketplace.
@@ -65,7 +64,7 @@ export function LandingPage() {
               <Button
                 onClick={handleGetStarted}
                 size="lg"
-                className=" mb-4 p-4 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold px-8 py-4 rounded-xl shadow-2xl transform hover:scale-105 transition-all duration-200 text-lg"
+                className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold px-8 py-4 rounded-xl shadow-2xl transform hover:scale-105 transition-all duration-200 text-lg"
               >
                 Get Started
                 <ArrowRight className="ml-2 w-5 h-5" />
