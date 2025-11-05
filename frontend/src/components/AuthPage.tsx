@@ -10,6 +10,8 @@ export function AuthPage() {
   const { isDark, toggleTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
 
+  const logoPath = '/BLOX.png';
+
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
       {/* Fallback gradient background */}
@@ -36,17 +38,8 @@ export function AuthPage() {
           </div>
         </div>
 
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mb-4 shadow-lg">
+        <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mb-4 shadow-lg">
             <span className="text-white font-bold text-2xl">BM</span>
-          </div>
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-            BloxMarket
-          </h1>
-          <p className="text-muted-foreground mt-2">
-            The ultimate Roblox trading community
-          </p>
         </div>
 
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'login' | 'register')} className="w-full">

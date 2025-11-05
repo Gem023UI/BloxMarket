@@ -17,7 +17,7 @@ export function LandingPage() {
   const handleGoToDashboard = () => {
     setCurrentPage('dashboard');
   };
-
+  
   return (
     <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
       {/* Background Image */}
@@ -43,14 +43,10 @@ export function LandingPage() {
 
         {/* Hero Section */}
         <div className="text-center text-white">
-          {/* Logo */}
-          <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-3xl mb-6 shadow-2xl">
-            <span className="text-white font-bold text-3xl">BM</span>
-          </div>
 
           {/* Main Heading with float and glow animation */}
           <h1 className="text-5xl md:text-7xl font-bold mb-6 bg-gradient-to-r from-white via-blue-100 to-purple-100 bg-clip-text text-transparent animate-float animate-glow">
-            BloxMarket
+            BLOXMARKET
           </h1>
           
           {/* Subtitle with fade-in and slight movement */}
@@ -64,7 +60,7 @@ export function LandingPage() {
               <Button
                 onClick={handleGetStarted}
                 size="lg"
-                className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold px-8 py-4 rounded-xl shadow-2xl transform hover:scale-105 transition-all duration-200 text-lg"
+                className=" mb-4 p-4 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold px-8 py-4 rounded-xl shadow-2xl transform hover:scale-105 transition-all duration-200 text-lg"
               >
                 Get Started
                 <ArrowRight className="ml-2 w-5 h-5" />

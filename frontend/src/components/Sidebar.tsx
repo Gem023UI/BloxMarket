@@ -42,6 +42,7 @@ export function Sidebar() {
   
   // Simplified admin status check - directly from user object
   const isAdminOrModerator = user?.role === 'admin' || user?.role === 'moderator';
+  const logoPath = '/BLOX.png';
 
   const adminMenuItems = [
     { id: 'admin', label: 'Dashboard', icon: BarChart3 },
@@ -140,6 +141,13 @@ export function Sidebar() {
         - z-20 ensures it stays above content but below modals/overlays
       */}
 
+      <div className="inline-flex items-center justify-center w-24 h-20 mb-2 rounded-3xl shadow-2xl bg-white/10 backdrop-blur-md">
+        <img
+          src={logoPath}
+          alt="BloxMarket Logo"
+          className="w-auto h-20 object-cover drop-shadow-lg "
+        />
+      </div>
 
       {/* User Profile Section - Fixed height with consistent spacing */}
       <div className="p-4 border-b border-border flex-shrink-0 bg-muted/30">

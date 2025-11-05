@@ -27,7 +27,7 @@ import { GlobalLoadingProvider } from './contexts/GlobalLoadingContext';
 import GlobalLoader from './components/GlobalLoader';
 import GlobalLoadingSetup from './components/GlobalLoadingSetup';
 import { Footer } from './components/ui/footer';
-import { Header } from './components/ui/header';
+// import { Header } from './components/ui/header';
 
 // Error Boundary Component
 interface ErrorBoundaryProps {
@@ -402,7 +402,7 @@ export default function App() {
                   </div>
                 </div>
                 
-                <Header />
+                {/*<Header />*/}
                 <main className="flex-1 relative z-10 glass">
                   <div className="animate-fadeInUp">
                     {currentPage === 'auth' ? <AuthPage /> : <LandingPage />}
@@ -433,7 +433,7 @@ export default function App() {
                 <div className="absolute top-1/2 right-1/4 w-48 h-48 bg-gradient-to-br from-yellow-500/5 to-orange-500/5 rounded-full animate-float delay-3000"></div>
               </div>
               
-              <Header />
+              {/*<Header />*/}
               {/* Main layout container with flex for sidebar and content */}
               <div className="flex h-screen pt-16">
                 {/* Sticky Sidebar - stays in document flow but sticks to top when scrolling */}
